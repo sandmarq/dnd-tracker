@@ -1,11 +1,11 @@
 //! Types correspondant aux éléments XML du format de compendium Fight Club.
 
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use std::fs::File;
 use std::io::BufReader;
 use std::path::Path;
 
-#[derive(Debug, Deserialize, Clone, Default)]
+#[derive(Debug, Deserialize, Serialize, Clone, Default)]
 #[serde(default)]
 pub struct Compendium {
     #[serde(rename = "item", default)]
@@ -20,7 +20,7 @@ pub struct Compendium {
     pub feats: Vec<Feat>,
 }
 
-#[derive(Debug, Deserialize, Clone, Default)]
+#[derive(Debug, Deserialize, Serialize, Clone, Default)]
 #[serde(default)]
 pub struct Item {
     pub name: String,
@@ -41,7 +41,7 @@ pub struct Item {
     pub modifier: Vec<Modifier>,
 }
 
-#[derive(Debug, Deserialize, Clone, Default)]
+#[derive(Debug, Deserialize, Serialize, Clone, Default)]
 #[serde(default)]
 pub struct Spell {
     pub name: String,
@@ -56,7 +56,7 @@ pub struct Spell {
     pub text: Vec<String>,
 }
 
-#[derive(Debug, Deserialize, Clone, Default)]
+#[derive(Debug, Deserialize, Serialize, Clone, Default)]
 #[serde(default)]
 pub struct Class {
     pub name: String,
@@ -70,7 +70,7 @@ pub struct Class {
     pub autolevels: Vec<Autolevel>,
 }
 
-#[derive(Debug, Deserialize, Clone, Default)]
+#[derive(Debug, Deserialize, Serialize, Clone, Default)]
 #[serde(default)]
 pub struct Autolevel {
     #[serde(rename = "@level", default)]
@@ -82,7 +82,7 @@ pub struct Autolevel {
     pub slots: Option<String>,
 }
 
-#[derive(Debug, Deserialize, Clone, Default)]
+#[derive(Debug, Deserialize, Serialize, Clone, Default)]
 #[serde(default)]
 pub struct Counter {
     pub name: String,
@@ -90,7 +90,7 @@ pub struct Counter {
     pub reset: String,
 }
 
-#[derive(Debug, Deserialize, Clone, Default)]
+#[derive(Debug, Deserialize, Serialize, Clone, Default)]
 #[serde(default)]
 pub struct Feature {
     #[serde(default)]
@@ -99,7 +99,7 @@ pub struct Feature {
     pub text: Vec<String>,
 }
 
-#[derive(Debug, Deserialize, Clone, Default)]
+#[derive(Debug, Deserialize, Serialize, Clone, Default)]
 #[serde(default)]
 pub struct Race {
     pub name: String,
@@ -110,7 +110,7 @@ pub struct Race {
     pub traits: Vec<Feature>,
 }
 
-#[derive(Debug, Deserialize, Clone, Default)]
+#[derive(Debug, Deserialize, Serialize, Clone, Default)]
 #[serde(default)]
 pub struct Feat {
     pub name: String,
@@ -119,7 +119,7 @@ pub struct Feat {
     pub text: Vec<String>,
 }
 
-#[derive(Debug, Deserialize, Clone, Default)]
+#[derive(Debug, Deserialize, Serialize, Clone, Default)]
 #[serde(default)]
 pub struct Modifier {
     #[serde(rename = "@category")]

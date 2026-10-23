@@ -140,6 +140,10 @@ impl App {
         self.running
     }
 
+    pub fn set_status(&mut self, message: String) {
+        self.status = message;
+    }
+
     pub fn quit(&mut self) {
         self.running = false;
     }

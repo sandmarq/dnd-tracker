@@ -7,6 +7,14 @@ use std::path::{Path, PathBuf};
 
 /// Choisit le dossier de données utilisateur selon les conventions de la plateforme.
 pub fn character_file() -> Result<PathBuf, Box<dyn Error>> {
+    Ok(data_directory()?.join("characters.json"))
+}
+
+pub fn compendium_file() -> Result<PathBuf, Box<dyn Error>> {
+    Ok(data_directory()?.join("compendium.sqlite3"))
+}
+
+fn data_directory() -> Result<PathBuf, Box<dyn Error>> {
     let data_dir = if let Some(data_home) = std::env::var_os("XDG_DATA_HOME") {
         PathBuf::from(data_home)
     } else if let Some(app_data) = std::env::var_os("APPDATA") {
@@ -21,7 +29,7 @@ pub fn character_file() -> Result<PathBuf, Box<dyn Error>> {
             PathBuf::from(home).join(".local/share")
         }
     };
-    Ok(data_dir.join("dnd-tracker").join("characters.json"))
+    Ok(data_dir.join("dnd-tracker"))
 }
 
 /// Une première exécution démarre avec une liste vide; les erreurs JSON restent visibles.

@@ -3,10 +3,12 @@
 mod app;
 mod character;
 mod compendium;
+mod compendium_store;
 mod storage;
 
 use app::App;
 use compendium::Compendium;
+use compendium_store::Metadata;
 use crossterm::event::{self, Event};
 use crossterm::execute;
 use crossterm::terminal::{
@@ -20,15 +22,14 @@ use std::path::PathBuf;
 use std::time::Duration;
 
 fn main() -> Result<(), Box<dyn Error>> {
-    let Some(xml_path) = find_compendium_path()? else {
+    let Some(xml_path) = resolve_xml_argument()? else {
         return Ok(());
     };
-    let compendium = Compendium::load_from_file(&xml_path).map_err(|error| {
-        format!(
-            "Impossible de charger le compendium XML ({}) : {error}",
-            xml_path.display()
-        )
-    })?;
+    let database_path = storage::compendium_file()?;
+    let (compendium, startup_message) = match xml_path {
+        Some(xml_path) => import_or_load(&xml_path, &database_path)?,
+        None => load_active_compendium(&database_path)?,
+    };
     let storage_path = storage::character_file()?;
     let mut app = App::new(compendium, storage_path.clone()).map_err(|error| {
         format!(
@@ -36,6 +37,7 @@ fn main() -> Result<(), Box<dyn Error>> {
             storage_path.display()
         )
     })?;
+    app.set_status(startup_message);
 
     enable_raw_mode()?;
     let mut output = stdout();
@@ -50,32 +52,43 @@ fn main() -> Result<(), Box<dyn Error>> {
     Ok(())
 }
 
-fn find_compendium_path() -> Result<Option<PathBuf>, Box<dyn Error>> {
+fn resolve_xml_argument() -> Result<Option<Option<PathBuf>>, Box<dyn Error>> {
     let mut arguments = std::env::args_os().skip(1);
     let first_argument = arguments.next();
     if first_argument.as_deref() == Some(std::ffi::OsStr::new("--help"))
         || first_argument.as_deref() == Some(std::ffi::OsStr::new("-h"))
     {
         println!(
-            "Usage: dnd-tracker [CHEMIN_DU_COMPENDIUM.xml]\n\
-             Ou définir DND_COMPENDIUM pour choisir le compendium XML."
+            "Usage: dnd-tracker [--import] [CHEMIN_DU_COMPENDIUM.xml]\n\
+             Sans argument, le compendium actif est chargé depuis SQLite.\n\
+             --import ou un chemin importe/remplace le compendium actif.\n\
+             DND_COMPENDIUM peut aussi sélectionner un fichier XML."
         );
         return Ok(None);
     }
+    let import_flag = first_argument.as_deref() == Some(std::ffi::OsStr::new("--import"));
+    let supplied_path = if import_flag {
+        arguments.next()
+    } else {
+        first_argument
+    };
     if arguments.next().is_some() {
-        return Err("Usage: dnd-tracker [CHEMIN_DU_COMPENDIUM.xml]".into());
+        return Err("Usage: dnd-tracker [--import] [CHEMIN_DU_COMPENDIUM.xml]".into());
     }
-    if let Some(path) = first_argument {
+    if import_flag && supplied_path.is_none() {
+        return Err("--import doit être suivi du chemin du compendium XML.".into());
+    }
+    if let Some(path) = supplied_path {
         let path = PathBuf::from(path);
         if path.is_file() {
-            return Ok(Some(path));
+            return Ok(Some(Some(path)));
         }
         return Err(format!("Compendium XML introuvable : {}", path.display()).into());
     }
     if let Some(path) = std::env::var_os("DND_COMPENDIUM") {
         let path = PathBuf::from(path);
         if path.is_file() {
-            return Ok(Some(path));
+            return Ok(Some(Some(path)));
         }
         return Err(format!(
             "Le fichier défini par DND_COMPENDIUM est introuvable : {}",
@@ -83,7 +96,10 @@ fn find_compendium_path() -> Result<Option<PathBuf>, Box<dyn Error>> {
         )
         .into());
     }
+    Ok(Some(None))
+}
 
+fn default_xml_path() -> Result<Option<PathBuf>, Box<dyn Error>> {
     let file_name = "WotC_5.5e_only.xml";
     let current_dir = std::env::current_dir()?;
     // Priorité au fichier dans le dossier de lancement, puis aux répertoires
@@ -104,16 +120,84 @@ fn find_compendium_path() -> Result<Option<PathBuf>, Box<dyn Error>> {
         }
     }
     candidates.dedup();
-    candidates
+    Ok(candidates
         .iter()
         .find(|candidate| candidate.is_file())
-        .cloned()
-        .map(Some)
-        .ok_or_else(|| {
-            format!(
-                "Compendium introuvable. Compilez la collection WotC_5.5e_only.xml de FightClub5eXML et placez le résultat dans Compendiums/{file_name}, ou passez son chemin en argument / via DND_COMPENDIUM. Un fichier WotC_5.5e+Legacy_5e.xml dans le dossier du projet est aussi détecté automatiquement."
-            ).into()
-        })
+        .cloned())
+}
+
+fn load_active_compendium(
+    database_path: &std::path::Path,
+) -> Result<(Compendium, String), Box<dyn Error>> {
+    if let Some((compendium, metadata)) = compendium_store::load(database_path)? {
+        if PathBuf::from(&metadata.source_path).is_file() {
+            let current_hash =
+                compendium_store::fingerprint(PathBuf::from(&metadata.source_path).as_path())?;
+            if current_hash != metadata.sha256 {
+                return import_or_load(
+                    PathBuf::from(metadata.source_path).as_path(),
+                    database_path,
+                );
+            }
+        }
+        return Ok((compendium, cache_message(&metadata)));
+    }
+
+    let xml_path = default_xml_path()?.ok_or_else(|| {
+        "Aucun compendium en cache. Importez un XML avec \
+         `cargo run -- --import /chemin/vers/compendium.xml`."
+            .to_string()
+    })?;
+    import_or_load(&xml_path, database_path)
+}
+
+fn import_or_load(
+    xml_path: &std::path::Path,
+    database_path: &std::path::Path,
+) -> Result<(Compendium, String), Box<dyn Error>> {
+    let source_hash = compendium_store::fingerprint(xml_path).map_err(|error| {
+        format!(
+            "Impossible de lire le compendium XML ({}): {error}",
+            xml_path.display()
+        )
+    })?;
+    if compendium_store::source_fingerprint(database_path)?.as_deref() == Some(&source_hash) {
+        if let Some((compendium, metadata)) = compendium_store::load(database_path)? {
+            return Ok((compendium, cache_message(&metadata)));
+        }
+    }
+
+    let compendium = Compendium::load_from_file(xml_path).map_err(|error| {
+        format!(
+            "Impossible de charger le compendium XML ({}): {error}",
+            xml_path.display()
+        )
+    })?;
+    if compendium_store::fingerprint(xml_path)? != source_hash {
+        return Err(format!(
+            "Le fichier XML a changé pendant l'import; le cache précédent est conservé. Réessayez avec {}.",
+            xml_path.display()
+        )
+        .into());
+    }
+    compendium_store::replace(database_path, xml_path, &source_hash, &compendium)
+        .map_err(|error| format!("Échec de remplacement du cache SQLite : {error}"))?;
+    let message = format!(
+        "Compendium importé dans SQLite : {} objets, {} sorts, {} classes, {} espèces et {} dons.",
+        compendium.items.len(),
+        compendium.spells.len(),
+        compendium.classes.len(),
+        compendium.races.len(),
+        compendium.feats.len()
+    );
+    Ok((compendium, message))
+}
+
+fn cache_message(metadata: &Metadata) -> String {
+    format!(
+        "Compendium chargé depuis le cache SQLite (source : {}). Utilisez --import pour le remplacer.",
+        metadata.source_path
+    )
 }
 
 fn run_app(

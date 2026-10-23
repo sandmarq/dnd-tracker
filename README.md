@@ -1,6 +1,6 @@
 # D&D Tracker
 
-Gestionnaire de personnages D&D 5e en Rust avec interface terminal (TUI). Le compendium XML est généré à partir de [FightClub5eXML](https://github.com/vidalvanbergen/FightClub5eXML); il n'est pas inclus dans ce dépôt.
+Gestionnaire de personnages D&D 5e en Rust avec interface terminal (TUI). Le compendium XML est généré à partir de [FightClub5eXML](https://github.com/vidalvanbergen/FightClub5eXML); il n'est pas inclus dans ce dépôt. Après l'import initial, les données du compendium sont mises en cache dans une base SQLite locale pour accélérer les lancements suivants.
 
 ## Fonctionnalités
 
@@ -38,22 +38,31 @@ La compilation complète inclut les contenus tiers/homebrew d'autres collections
 
 ## Lancer
 
-Depuis la racine de ce projet, en passant le chemin du compendium :
+Depuis la racine de ce projet, importe un compendium XML de ton choix :
 
 ```sh
-cargo run -- /chemin/vers/FightClub5eXML/Compendiums/WotC_5.5e_only.xml
+cargo run -- --import /chemin/vers/FightClub5eXML/Compendiums/WotC_5.5e_only.xml
 ```
 
-On peut également définir `DND_COMPENDIUM` :
+Un chemin passé seul reste accepté comme raccourci d'import :
 
 ```sh
-export DND_COMPENDIUM="/chemin/vers/FightClub5eXML/Compendiums/WotC_5.5e_only.xml"
+cargo run -- /chemin/vers/autre-compendium.xml
+```
+
+Après l'import, démarre ou redémarre normalement :
+
+```sh
 cargo run
 ```
 
-Pour ne pas retaper le chemin, copie le fichier compilé dans `Compendiums/WotC_5.5e_only.xml` à la racine de ce projet, puis lance `cargo run`. L'application détecte aussi automatiquement un fichier `WotC_5.5e+Legacy_5e.xml` placé à la racine du projet. Les fichiers de compendium et les données locales des personnages sont ignorés par Git.
+L'application lit alors le compendium actif depuis SQLite. Si le XML source enregistré existe toujours et a changé, il est réimporté automatiquement. Tu peux aussi choisir le XML au lancement avec `DND_COMPENDIUM`. Sans cache existant, l'application recherche `Compendiums/WotC_5.5e_only.xml`, `data/compendium.xml` ou `WotC_5.5e+Legacy_5e.xml` dans le dossier du projet.
 
-Sur Windows, passe le chemin au programme avec `cargo run -- C:\chemin\WotC_5.5e_only.xml`, ou définis la variable d'environnement `$env:DND_COMPENDIUM`.
+Chaque remplacement est effectué dans une transaction : le cache précédent reste actif si la lecture XML ou l'import échoue. L'empreinte SHA-256 permet de réutiliser le cache lorsque le fichier est inchangé.
+
+La base de compendium est sauvegardée dans `$XDG_DATA_HOME/dnd-tracker/compendium.sqlite3`, ou dans `~/.local/share/dnd-tracker/compendium.sqlite3` si `XDG_DATA_HOME` n'est pas défini. Sous Windows, l'application utilise `%APPDATA%\dnd-tracker\compendium.sqlite3`. Les personnages restent sauvegardés séparément en JSON dans le même dossier.
+
+Sur Windows, passe le chemin au programme avec `cargo run -- --import C:\chemin\WotC_5.5e_only.xml`, ou définis `$env:DND_COMPENDIUM`.
 
 Les fiches sont sauvegardées dans `$XDG_DATA_HOME/dnd-tracker/characters.json`, ou dans `~/.local/share/dnd-tracker/characters.json` si `XDG_DATA_HOME` n'est pas défini. Sous Windows, l'application utilise `%APPDATA%\dnd-tracker\characters.json`.
 
