@@ -91,12 +91,15 @@ fn find_compendium_path() -> Result<Option<PathBuf>, Box<dyn Error>> {
     let mut candidates = vec![
         current_dir.join("Compendiums").join(file_name),
         current_dir.join("data").join("compendium.xml"),
+        // Reconnaît les noms de compendium déjà utilisés par cette installation.
+        current_dir.join("WotC_5.5e+Legacy_5e.xml"),
     ];
     if let Ok(executable) = std::env::current_exe() {
         let mut directory = executable.parent();
         while let Some(current) = directory {
             candidates.push(current.join("Compendiums").join(file_name));
             candidates.push(current.join("data").join("compendium.xml"));
+            candidates.push(current.join("WotC_5.5e+Legacy_5e.xml"));
             directory = current.parent();
         }
     }
@@ -108,7 +111,7 @@ fn find_compendium_path() -> Result<Option<PathBuf>, Box<dyn Error>> {
         .map(Some)
         .ok_or_else(|| {
             format!(
-                "Compendium introuvable. Compilez la collection WotC_5.5e_only.xml de FightClub5eXML et placez le résultat dans Compendiums/{file_name}, ou passez son chemin en argument / via DND_COMPENDIUM."
+                "Compendium introuvable. Compilez la collection WotC_5.5e_only.xml de FightClub5eXML et placez le résultat dans Compendiums/{file_name}, ou passez son chemin en argument / via DND_COMPENDIUM. Un fichier WotC_5.5e+Legacy_5e.xml dans le dossier du projet est aussi détecté automatiquement."
             ).into()
         })
 }

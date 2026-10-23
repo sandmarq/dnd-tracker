@@ -51,7 +51,7 @@ export DND_COMPENDIUM="/chemin/vers/FightClub5eXML/Compendiums/WotC_5.5e_only.xm
 cargo run
 ```
 
-Pour ne pas retaper le chemin, copie le fichier compilé dans `Compendiums/WotC_5.5e_only.xml` à la racine de ce projet, puis lance `cargo run`. Les fichiers de compendium et les données locales des personnages sont ignorés par Git.
+Pour ne pas retaper le chemin, copie le fichier compilé dans `Compendiums/WotC_5.5e_only.xml` à la racine de ce projet, puis lance `cargo run`. L'application détecte aussi automatiquement un fichier `WotC_5.5e+Legacy_5e.xml` placé à la racine du projet. Les fichiers de compendium et les données locales des personnages sont ignorés par Git.
 
 Sur Windows, passe le chemin au programme avec `cargo run -- C:\chemin\WotC_5.5e_only.xml`, ou définis la variable d'environnement `$env:DND_COMPENDIUM`.
 
