@@ -1,0 +1,5 @@
+/target
+/Compendiums/
+/data/*.xml
+/WotC_5.5e+Legacy_5e.xml
+/characters.json

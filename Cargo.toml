@@ -1,0 +1,15 @@
+[package]
+name = "dnd-tracker"
+version = "0.1.0"
+edition = "2021"
+description = "Gestionnaire TUI de personnages D&D 5e à partir d'un compendium XML FightClub5eXML"
+license = "MIT"
+readme = "README.md"
+
+[dependencies]
+ratatui = "0.29"
+crossterm = "0.28"
+serde = { version = "1.0", features = ["derive"] }
+quick-xml = { version = "0.37", features = ["serialize", "overlapped-lists"] }
+rand = "0.8"
+serde_json = "1.0"
