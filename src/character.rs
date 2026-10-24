@@ -13,6 +13,18 @@ pub struct Character {
     pub class: String,
     /// Background choisi à la création.
     pub background: String,
+    /// Histoire personnelle complète, saisie par le joueur.
+    pub backstory: String,
+    /// Notes libres et évolutives prises pendant les aventures.
+    pub adventure_notes: String,
+    /// Défenses particulières, résistances, immunités ou vulnérabilités.
+    pub defences: String,
+    /// Sens spéciaux indiqués manuellement en complément de la perception passive.
+    pub senses: String,
+    /// Maîtrises d'outils, langues, armures et autres formations.
+    pub proficiencies_and_training: String,
+    /// Vitesse personnalisée; vide signifie utiliser celle de l'espèce.
+    pub speed_override: String,
     /// Sous-classe saisie ou choisie après la création.
     pub subclass: Option<String>,
     /// Niveau courant, compris entre 1 et 20.
@@ -69,6 +81,18 @@ pub struct Character {
     pub conditions: Vec<String>,
     /// Journal limité des sorts, ressources, repos et actions de combat.
     pub combat_log: Vec<String>,
+    /// Créatures, familiers, montures et autres éléments suivis avec la fiche.
+    pub extras_creatures: Vec<ExtraCreature>,
+}
+
+/// Créature ou compagnon suivi dans les éléments supplémentaires du personnage.
+#[derive(Debug, Serialize, Deserialize, Clone, Default)]
+#[serde(default)]
+pub struct ExtraCreature {
+    /// Nom usuel de la créature ou du compagnon.
+    pub name: String,
+    /// Statistiques, liens ou notes utiles pour l'aventure.
+    pub details: String,
 }
 
 /// Choix de caractéristiques, don ou sous-classe validés à un niveau précis.
@@ -133,6 +157,12 @@ impl Default for Character {
             race: String::new(),
             class: String::new(),
             background: String::new(),
+            backstory: String::new(),
+            adventure_notes: String::new(),
+            defences: String::new(),
+            senses: String::new(),
+            proficiencies_and_training: String::new(),
+            speed_override: String::new(),
             subclass: None,
             level: 1,
             experience: 0,
@@ -161,6 +191,7 @@ impl Default for Character {
             spell_slots_max: [0; 10],
             conditions: Vec::new(),
             combat_log: Vec::new(),
+            extras_creatures: Vec::new(),
         }
     }
 }

@@ -5,17 +5,19 @@ Gestionnaire de personnages D&D 5e en Rust avec interface terminal (TUI). Le com
 ## Fonctionnalités
 
 - Plusieurs personnages avec sauvegarde JSON automatique.
-- Création guidée depuis les espèces, classes, backgrounds et compétences du compendium.
-- Application des maîtrises, du don et des bonus de caractéristiques du background.
+- Création guidée depuis les espèces, classes, historiques et compétences du compendium.
+- Application des maîtrises, du don et des bonus de caractéristiques de l'historique.
 - Choix des paquets d'équipement de départ A/B, objets complémentaires et sorts de classe.
 - Fiche avec caractéristiques, modificateurs, compétences, sauvegardes, maîtrise, PV, CA et statistiques d'incantation.
-- Progression guidée : choix de sous-classe, améliorations de caractéristiques ou dons éligibles aux niveaux débloqués; les dons de niveau 19 sont limités aux dons Boon.
+- Sections de fiche pour les caractéristiques, jets de sauvegarde, compétences, sens, vitesse, défenses, capacités et traits, maîtrises et formations.
+- Progression guidée : choix de sous-classe, améliorations de caractéristiques ou dons éligibles aux niveaux débloqués; au niveau 19, le choix est limité aux dons épiques.
 - Baisse de niveau avec retrait des choix de progression enregistrés et recalcul des ressources et emplacements encore accessibles.
 - Inventaire lié aux objets XML, équipement et calcul de CA.
 - Liste de sorts et suivi des emplacements.
 - Suivi de PV, PV temporaires, dés de vie et ressources; repos court et long.
 - Suivi de l'XP avec calcul automatique du niveau selon les seuils 5e 2024, avec modification manuelle du niveau.
 - Conditions actives et journal des actions de combat (sorts lancés, emplacements et ressources dépensés, dégâts/soins, repos et notes manuelles).
+- Journal de personnage avec histoire personnelle modifiable sur plusieurs lignes, notes d'aventure, défenses, sens, vitesse personnalisée, maîtrises supplémentaires et créatures/compagnons.
 
 ## Prérequis
 
@@ -71,14 +73,15 @@ Sur Windows, passe le chemin au programme avec `cargo run -- --import C:\chemin\
 
 Les fiches sont sauvegardées dans `$XDG_DATA_HOME/dnd-tracker/characters.json`, ou dans `~/.local/share/dnd-tracker/characters.json` si `XDG_DATA_HOME` n'est pas défini. Sous Windows, l'application utilise `%APPDATA%\dnd-tracker\characters.json`.
 
-Le compendium SQLite existant est actualisé depuis son XML source pour inclure les backgrounds. Si ce fichier source n'est plus disponible, réimporte-le avec `--import`.
+Le compendium SQLite existant est actualisé depuis son XML source pour inclure les historiques. Si ce fichier source n'est plus disponible, réimporte-le avec `--import`.
 
 ## Commandes
 
-- `n` : créer une fiche; saisir le nom, choisir l'espèce, la classe et le background, répartir les caractéristiques et compétences, puis choisir l'équipement et les sorts de départ. Les maîtrises et le don du background sont ajoutés automatiquement; les paquets A/B sont proposés quand le compendium les décrit.
+- `n` : créer une fiche; saisir le nom, choisir l'espèce, la classe et l'historique, répartir les caractéristiques et compétences, puis choisir l'équipement et les sorts de départ. Les maîtrises et le don de l'historique sont ajoutés automatiquement; les paquets A/B sont proposés quand le compendium les décrit.
 - Dans les sélecteurs d'équipement et de sorts de création : `Espace` sélectionne/désélectionne une option et `Entrée` passe à l'étape suivante.
-- `Tab` : passer entre fiche, équipement, sorts et progression.
-- `↑` / `↓` : changer de personnage; dans les vues d'équipement, sorts et progression, déplacer la sélection.
+- `Tab` : passer entre fiche, inventaire, sorts, progression et journal.
+- La barre d'aide au bas de l'écran affiche les raccourcis disponibles selon l'onglet ou le dialogue ouvert; la touche est mise en évidence sous la forme `(I)nventaire`.
+- `↑` / `↓` : changer de personnage; dans les vues d'inventaire, sorts, progression et journal, déplacer la sélection.
 - `1` à `6` dans la fiche : modifier FOR, DEX, CON, INT, SAG ou CHA.
 - `i` : ajouter un objet; `Espace` équipe/déséquipe; `x` retire l'objet sélectionné.
 - `p` : ajouter un sort de la classe; dans la vue des sorts, `1` à `9` choisit le niveau d'emplacement, `]` dépense un emplacement et `[` le restaure.
@@ -89,6 +92,7 @@ Le compendium SQLite existant est actualisé depuis son XML source pour inclure 
 - `C` : ajouter une condition (ex. `stunned`, `fear` ou `Effrayé`); `x` dans la fiche retire la dernière condition. Les conditions ne sont pas effacées automatiquement lors d'un repos.
 - `c` : lancer un sort de la liste; un sort avec emplacement disponible le dépense automatiquement. Les sorts mineurs n'en dépensent pas.
 - `a` : noter manuellement une attaque, une action ou un événement; le journal de la fiche conserve les 100 dernières entrées.
+- Dans l'onglet Journal : `o` édite l'histoire personnelle, `N` les notes d'aventure, `D` les défenses, `S` les sens, `P` les maîtrises/formations, `V` la vitesse personnalisée (`Entrée` vide rétablit celle de l'espèce), `E` ajoute une créature au format `nom | détails`, `M` modifie la créature sélectionnée et `x` la retire. Dans les champs histoire/notes, `Ctrl+Entrée` insère un saut de ligne; les flèches gauche/droite et `Retour arrière` permettent de modifier le texte.
 - `[` / `]` dans la fiche : choisir une ressource; `v` : repos court; `r` ou `R` : repos long. Un repos court restaure les ressources marquées récupérables à court repos et les emplacements du Warlock; un repos long restaure les emplacements et ressources.
 - `PgUp` / `PgDn` : faire défiler le panneau de détails; `Esc` annule une saisie; `q` quitte.
 

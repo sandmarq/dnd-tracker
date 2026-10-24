@@ -1,5 +1,6 @@
 //! État, règles de fiche et vues interactives du gestionnaire de personnages.
 
+use crate::character::ExtraCreature;
 use crate::character::{AbilityIncrease, Character, InventorySlot, LevelAdvancement, Resource};
 use crate::compendium::{Background, Class, Compendium, Feat, Item, Spell};
 use crate::storage;
@@ -17,7 +18,7 @@ const ABILITY_NAMES: [&str; 6] = ["FOR", "DEX", "CON", "INT", "SAG", "CHA"];
 /// Tableau standard utilisé comme valeurs initiales à la création.
 const STANDARD_ARRAY: [i32; 6] = [15, 14, 13, 12, 10, 8];
 /// Option explicite permettant de créer un personnage sans background.
-const NO_BACKGROUND_OPTION: &str = "Aucun (sans background)";
+const NO_BACKGROUND_OPTION: &str = "Aucun (sans historique)";
 /// Seuils cumulés d'expérience de la progression 5e 2024, indexés par niveau.
 const XP_LEVEL_THRESHOLDS: [u32; 20] = [
     0, 300, 900, 2_700, 6_500, 14_000, 23_000, 34_000, 48_000, 64_000, 85_000, 100_000, 120_000,
@@ -53,6 +54,7 @@ enum Tab {
     Equipment,
     Spells,
     Progression,
+    Journal,
 }
 
 impl Tab {
@@ -62,7 +64,8 @@ impl Tab {
             Self::Sheet => Self::Equipment,
             Self::Equipment => Self::Spells,
             Self::Spells => Self::Progression,
-            Self::Progression => Self::Sheet,
+            Self::Progression => Self::Journal,
+            Self::Journal => Self::Sheet,
         }
     }
 }
@@ -100,6 +103,22 @@ enum InputKind {
     CombatAction,
     Subclass,
     SkillChoices,
+    /// Édition de l'histoire personnelle multiligne.
+    Backstory,
+    /// Édition des notes de campagne multilignes.
+    AdventureNotes,
+    /// Résistances, immunités et vulnérabilités saisies par le joueur.
+    Defences,
+    /// Sens spéciaux personnalisés.
+    Senses,
+    /// Maîtrises et formations supplémentaires.
+    ProficienciesAndTraining,
+    /// Vitesse qui remplace la vitesse d'espèce si elle n'est pas vide.
+    Speed,
+    /// Ajout d'une créature ou d'un compagnon.
+    ExtraCreature,
+    /// Modification de la créature sélectionnée dans l'onglet Journal.
+    EditExtraCreature(usize),
 }
 
 /// Mode d'interaction exclusif actif dans l'interface.
@@ -144,12 +163,19 @@ enum PendingLevelChoice {
 
 /// Progression suspendue jusqu'à la validation de tous les choix débloqués.
 struct LevelUpWizard {
+    /// Niveau demandé par la hausse ou le changement d'XP.
     target_level: u8,
+    /// Choix obligatoires en attente, triés dans l'ordre des niveaux.
     pending: Vec<PendingLevelChoice>,
+    /// Niveau du choix présenté au joueur.
     current_level: u8,
+    /// Indique qu'au niveau courant un don épique est obligatoire.
     current_feat_only: bool,
+    /// Choix en cours de saisie avant validation.
     current_advancement: Option<LevelAdvancement>,
+    /// Choix déjà validés, appliqués à la fin de l'assistant.
     completed: Vec<LevelAdvancement>,
+    /// XP à appliquer lorsque la progression guidée est terminée.
     experience: Option<u32>,
 }
 
@@ -181,6 +207,8 @@ pub struct App {
     level_wizard: Option<LevelUpWizard>,
     /// Texte de la fenêtre de saisie courante.
     input: String,
+    /// Position du curseur dans la saisie, exprimée en octets UTF-8.
+    input_cursor: usize,
     /// Texte de filtre du sélecteur.
     picker_query: String,
     /// Index de l'option surlignée.
@@ -212,6 +240,7 @@ impl App {
             wizard: None,
             level_wizard: None,
             input: String::new(),
+            input_cursor: 0,
             picker_query: String::new(),
             picker_index: 0,
             status: String::from("Prêt. Appuyez sur n pour créer un personnage."),
@@ -271,6 +300,75 @@ impl App {
             }
             KeyCode::Char('i') if self.selected_character().is_some() => {
                 self.open_picker(PickKind::Item);
+            }
+            KeyCode::Char('o')
+                if self.selected_character().is_some() && self.tab == Tab::Journal =>
+            {
+                if let Some(value) = self.selected_character().map(|c| c.backstory.clone()) {
+                    self.start_edit_input(InputKind::Backstory, "Histoire personnelle", &value);
+                }
+            }
+            KeyCode::Char('N')
+                if self.selected_character().is_some() && self.tab == Tab::Journal =>
+            {
+                if let Some(value) = self.selected_character().map(|c| c.adventure_notes.clone()) {
+                    self.start_edit_input(InputKind::AdventureNotes, "Notes d'aventure", &value);
+                }
+            }
+            KeyCode::Char('D')
+                if self.selected_character().is_some() && self.tab == Tab::Journal =>
+            {
+                if let Some(value) = self.selected_character().map(|c| c.defences.clone()) {
+                    self.start_edit_input(InputKind::Defences, "Défenses et résistances", &value);
+                }
+            }
+            KeyCode::Char('S')
+                if self.selected_character().is_some() && self.tab == Tab::Journal =>
+            {
+                if let Some(value) = self.selected_character().map(|c| c.senses.clone()) {
+                    self.start_edit_input(InputKind::Senses, "Sens spéciaux", &value);
+                }
+            }
+            KeyCode::Char('P')
+                if self.selected_character().is_some() && self.tab == Tab::Journal =>
+            {
+                if let Some(value) = self
+                    .selected_character()
+                    .map(|c| c.proficiencies_and_training.clone())
+                {
+                    self.start_edit_input(
+                        InputKind::ProficienciesAndTraining,
+                        "Maîtrises et formations",
+                        &value,
+                    );
+                }
+            }
+            KeyCode::Char('V')
+                if self.selected_character().is_some() && self.tab == Tab::Journal =>
+            {
+                if let Some(value) = self.selected_character().map(|c| c.speed_override.clone()) {
+                    self.start_edit_input(InputKind::Speed, "Vitesse personnalisée", &value);
+                }
+            }
+            KeyCode::Char('E')
+                if self.selected_character().is_some() && self.tab == Tab::Journal =>
+            {
+                self.start_input(InputKind::ExtraCreature, "Créature : nom | détails");
+            }
+            KeyCode::Char('M')
+                if self.selected_character().is_some() && self.tab == Tab::Journal =>
+            {
+                if let Some(creature) = self
+                    .selected_character()
+                    .and_then(|character| character.extras_creatures.get(self.detail_index))
+                {
+                    let value = format!("{} | {}", creature.name, creature.details);
+                    self.start_edit_input(
+                        InputKind::EditExtraCreature(self.detail_index),
+                        "Modifier la créature : nom | détails",
+                        &value,
+                    );
+                }
             }
             KeyCode::Char('p') if self.selected_character().is_some() => {
                 self.open_picker(PickKind::Spell);
@@ -364,7 +462,7 @@ impl App {
         {
             self.start_input(
                 InputKind::BackgroundAbilityChoices,
-                "Bonus de caractéristiques du background",
+                "Bonus de caractéristiques de l'historique",
             );
             return;
         }
@@ -436,7 +534,7 @@ impl App {
                 .and_then(|feature| feature.text.first())
             {
                 if let Some(options) = extract_equipment_options(text) {
-                    packages.push(("Background".to_owned(), options));
+                    packages.push(("Historique".to_owned(), options));
                 }
             }
         }
@@ -510,13 +608,17 @@ impl App {
 
     /// Déplace la sélection selon l'onglet ou la liste des personnages affichés.
     fn move_selection(&mut self, direction: i8) {
-        if self.tab == Tab::Equipment || self.tab == Tab::Spells || self.tab == Tab::Progression {
+        if matches!(
+            self.tab,
+            Tab::Equipment | Tab::Spells | Tab::Progression | Tab::Journal
+        ) {
             let length = self
                 .selected_character()
                 .map(|character| match self.tab {
                     Tab::Equipment => character.equipment.len(),
                     Tab::Spells => character.prepared_spells.len(),
                     Tab::Progression => character.feats.len(),
+                    Tab::Journal => character.extras_creatures.len(),
                     _ => 0,
                 })
                 .unwrap_or(0);
@@ -540,6 +642,15 @@ impl App {
     /// Prépare une fenêtre de saisie et en définit le libellé de statut.
     fn start_input(&mut self, kind: InputKind, prompt: &str) {
         self.input.clear();
+        self.input_cursor = 0;
+        self.status = prompt.to_owned();
+        self.mode = Mode::Input(kind);
+    }
+
+    /// Ouvre une saisie préremplie afin de modifier un champ existant.
+    fn start_edit_input(&mut self, kind: InputKind, prompt: &str, value: &str) {
+        self.input = value.to_owned();
+        self.input_cursor = self.input.len();
         self.status = prompt.to_owned();
         self.mode = Mode::Input(kind);
     }
@@ -554,12 +665,54 @@ impl App {
     /// Modifie le texte saisi ou valide la valeur au clavier.
     fn handle_input_key(&mut self, key: KeyEvent, kind: InputKind) {
         match key.code {
+            KeyCode::Enter
+                if key.modifiers.contains(KeyModifiers::CONTROL)
+                    && matches!(kind, InputKind::Backstory | InputKind::AdventureNotes) =>
+            {
+                self.input.insert(self.input_cursor, '\n');
+                self.input_cursor += 1;
+            }
             KeyCode::Enter => self.commit_input(kind),
             KeyCode::Backspace => {
-                self.input.pop();
+                if self.input_cursor > 0 {
+                    let previous = self.input[..self.input_cursor]
+                        .char_indices()
+                        .next_back()
+                        .map(|(index, _)| index)
+                        .unwrap_or(0);
+                    self.input.drain(previous..self.input_cursor);
+                    self.input_cursor = previous;
+                }
+            }
+            KeyCode::Left => {
+                if self.input_cursor > 0 {
+                    self.input_cursor = self.input[..self.input_cursor]
+                        .char_indices()
+                        .next_back()
+                        .map(|(index, _)| index)
+                        .unwrap_or(0);
+                }
+            }
+            KeyCode::Right => {
+                if let Some((offset, character)) =
+                    self.input[self.input_cursor..].char_indices().next()
+                {
+                    self.input_cursor += offset + character.len_utf8();
+                }
+            }
+            KeyCode::Home => {
+                self.input_cursor = self.input[..self.input_cursor]
+                    .rfind('\n')
+                    .map_or(0, |index| index + 1);
+            }
+            KeyCode::End => {
+                self.input_cursor += self.input[self.input_cursor..]
+                    .find('\n')
+                    .unwrap_or(self.input.len() - self.input_cursor);
             }
             KeyCode::Char(ch) if !key.modifiers.contains(KeyModifiers::CONTROL) => {
-                self.input.push(ch);
+                self.input.insert(self.input_cursor, ch);
+                self.input_cursor += ch.len_utf8();
             }
             _ => {}
         }
@@ -631,7 +784,7 @@ impl App {
                     .unwrap_or_default();
                 let choices = parse_background_ability_choices(&self.input, &allowed);
                 let Some(choices) = choices else {
-                    self.status = "Choisissez les bonus parmi les caractéristiques du background : deux (+2 et +1), ou les trois (+1).".into();
+                    self.status = "Choisissez les bonus parmi les caractéristiques de l'historique : deux (+2 et +1), ou les trois (+1).".into();
                     return;
                 };
                 let Some(wizard) = self.wizard.as_mut() else {
@@ -875,6 +1028,80 @@ impl App {
                     character.subclass = (!value.is_empty()).then_some(value);
                 }
                 self.persist("Sous-classe mise à jour.");
+                self.mode = Mode::Normal;
+            }
+            InputKind::Backstory => {
+                let value = self.input.clone();
+                if let Some(character) = self.selected_character_mut() {
+                    character.backstory = value;
+                }
+                self.persist("Histoire personnelle mise à jour.");
+                self.mode = Mode::Normal;
+            }
+            InputKind::AdventureNotes => {
+                let value = self.input.clone();
+                if let Some(character) = self.selected_character_mut() {
+                    character.adventure_notes = value;
+                }
+                self.persist("Notes d'aventure mises à jour.");
+                self.mode = Mode::Normal;
+            }
+            InputKind::Defences => {
+                let value = self.input.trim().to_owned();
+                if let Some(character) = self.selected_character_mut() {
+                    character.defences = value;
+                }
+                self.persist("Défenses mises à jour.");
+                self.mode = Mode::Normal;
+            }
+            InputKind::Senses => {
+                let value = self.input.trim().to_owned();
+                if let Some(character) = self.selected_character_mut() {
+                    character.senses = value;
+                }
+                self.persist("Sens spéciaux mis à jour.");
+                self.mode = Mode::Normal;
+            }
+            InputKind::ProficienciesAndTraining => {
+                let value = self.input.trim().to_owned();
+                if let Some(character) = self.selected_character_mut() {
+                    character.proficiencies_and_training = value;
+                }
+                self.persist("Maîtrises et formations mises à jour.");
+                self.mode = Mode::Normal;
+            }
+            InputKind::Speed => {
+                let value = self.input.trim().to_owned();
+                if let Some(character) = self.selected_character_mut() {
+                    character.speed_override = value;
+                }
+                self.persist("Vitesse personnalisée mise à jour.");
+                self.mode = Mode::Normal;
+            }
+            InputKind::ExtraCreature | InputKind::EditExtraCreature(_) => {
+                let (name, details) = self.input.split_once('|').unwrap_or((&self.input, ""));
+                let name = name.trim().to_owned();
+                let details = details.trim().to_owned();
+                if name.is_empty() {
+                    self.status = "Le nom de la créature ne peut pas être vide.".into();
+                    return;
+                }
+                if let Some(character) = self.selected_character_mut() {
+                    let creature = ExtraCreature { name, details };
+                    if let InputKind::EditExtraCreature(index) = kind {
+                        if let Some(existing) = character.extras_creatures.get_mut(index) {
+                            *existing = creature;
+                        }
+                    } else {
+                        character.extras_creatures.push(creature);
+                        self.detail_index = character.extras_creatures.len().saturating_sub(1);
+                    }
+                }
+                self.persist(if matches!(kind, InputKind::EditExtraCreature(_)) {
+                    "Créature ou compagnon modifié."
+                } else {
+                    "Créature ou compagnon ajouté."
+                });
                 self.mode = Mode::Normal;
             }
             InputKind::SkillChoices => {
@@ -1351,12 +1578,17 @@ impl App {
                     character.feats.remove(index);
                     changed = true;
                 }
+                Tab::Journal if index < character.extras_creatures.len() => {
+                    character.extras_creatures.remove(index);
+                    changed = true;
+                }
                 _ => {}
             }
             self.detail_index = index.min(match tab {
                 Tab::Equipment => character.equipment.len().saturating_sub(1),
                 Tab::Spells => character.prepared_spells.len().saturating_sub(1),
                 Tab::Progression => character.feats.len().saturating_sub(1),
+                Tab::Journal => character.extras_creatures.len().saturating_sub(1),
                 _ => 0,
             });
         }
@@ -1520,7 +1752,7 @@ impl App {
                 self.status = format!(
                     "Niveau {level} : {}",
                     if feat_only {
-                        "choisissez un don de type Epic Boon."
+                        "choisissez un don épique."
                     } else {
                         "choisissez une amélioration de caractéristique ou un don."
                     }
@@ -2084,12 +2316,14 @@ impl App {
     /// Dessine le cadre, la fiche et le dialogue correspondant au mode actif.
     pub fn render(&self, frame: &mut Frame) {
         let area = frame.area();
+        let hints = self.footer_hints();
+        let footer_height = hints.len() as u16 + 3;
         let layout = Layout::default()
             .direction(Direction::Vertical)
             .constraints([
                 Constraint::Length(3),
                 Constraint::Min(8),
-                Constraint::Length(3),
+                Constraint::Length(footer_height),
             ])
             .split(area);
 
@@ -2110,8 +2344,13 @@ impl App {
         self.render_character_list(frame, body[0]);
         self.render_detail(frame, body[1]);
 
-        let footer = Paragraph::new(self.status.as_str())
-            .style(Style::default().fg(Color::Gray))
+        let mut footer_lines = vec![Line::from(Span::styled(
+            self.status.as_str(),
+            Style::default().fg(Color::Gray),
+        ))];
+        footer_lines.extend(hints);
+        let footer = Paragraph::new(Text::from(footer_lines))
+            .wrap(Wrap { trim: true })
             .block(Block::default().borders(Borders::ALL).title("État"));
         frame.render_widget(footer, layout[2]);
 
@@ -2120,6 +2359,119 @@ impl App {
             Mode::Picker(kind) => self.render_picker(frame, kind, area),
             Mode::ConfirmDelete => self.render_confirm_delete(frame, area),
             Mode::Normal => {}
+        }
+    }
+
+    /// Retourne les raccourcis pertinents pour le mode et l'onglet actuellement affichés.
+    fn footer_hints(&self) -> Vec<Line<'static>> {
+        match self.mode {
+            Mode::Input(kind) => {
+                let mut hints = vec![
+                    footer_action("Entrée", "Enregistrer"),
+                    footer_action("Échap", "Annuler"),
+                    footer_action("←/→", "Déplacer le curseur"),
+                    footer_action("Retour arrière", "Effacer"),
+                ];
+                if matches!(kind, InputKind::Backstory | InputKind::AdventureNotes) {
+                    hints.push(footer_action("Ctrl+Entrée", "Nouvelle ligne"));
+                }
+                vec![footer_line(&hints)]
+            }
+            Mode::Picker(kind) => {
+                let mut hints = vec![
+                    footer_action("↑/↓", "Choisir"),
+                    footer_action("Texte", "Filtrer"),
+                ];
+                if matches!(kind, PickKind::StartingItem | PickKind::Spell) && self.wizard.is_some()
+                {
+                    hints.push(footer_action("Espace", "Sélectionner"));
+                    hints.push(footer_action("Entrée", "Continuer"));
+                } else {
+                    hints.push(footer_action("Entrée", "Valider"));
+                }
+                hints.push(footer_action("Échap", "Annuler"));
+                vec![footer_line(&hints)]
+            }
+            Mode::ConfirmDelete => vec![footer_line(&[
+                footer_action("Y", "Confirmer"),
+                footer_action("N", "Annuler"),
+            ])],
+            Mode::Normal if self.characters.is_empty() => vec![footer_line(&[
+                footer_action("N", "Créer un personnage"),
+                footer_action("Q", "Quitter"),
+            ])],
+            Mode::Normal => {
+                let mut hints = vec![
+                    footer_action("Tab", "Onglet suivant"),
+                    footer_action(
+                        "↑/↓",
+                        if self.tab == Tab::Sheet {
+                            "Personnage"
+                        } else {
+                            "Sélection"
+                        },
+                    ),
+                    footer_action("n", "Nouveau personnage"),
+                    footer_action("d", "Supprimer fiche"),
+                    footer_action("Q", "Quitter"),
+                ];
+                match self.tab {
+                    Tab::Sheet => hints.extend([
+                        footer_action("1–6", "Caractéristiques"),
+                        footer_action("E", "XP"),
+                        footer_action("L", "Niveau"),
+                        footer_action("C", "Condition"),
+                        footer_action("X", "Retirer condition"),
+                        footer_action("A", "Action"),
+                        footer_action("H", "Dégâts/soins"),
+                        footer_action("T", "PV temp."),
+                        footer_action("G", "Dé de vie"),
+                        footer_action("U", "Ressource"),
+                        footer_action("[/]", "Choisir ressource"),
+                        footer_action("V", "Repos court"),
+                        footer_action("R", "Repos long"),
+                        footer_action("B", "Sous-classe"),
+                    ]),
+                    Tab::Equipment => hints.extend([
+                        footer_action("I", "Inventaire : ajouter objet"),
+                        footer_action("Espace", "Équiper"),
+                        footer_action("X", "Retirer"),
+                    ]),
+                    Tab::Spells => hints.extend([
+                        footer_action("P", "Ajouter sort"),
+                        footer_action("C", "Lancer sort"),
+                        footer_action("1–9", "Niveau emplacement"),
+                        footer_action("[", "Restaurer"),
+                        footer_action("]", "Dépenser"),
+                        footer_action("X", "Retirer"),
+                    ]),
+                    Tab::Progression => hints.extend([
+                        footer_action("E", "XP"),
+                        footer_action("L", "Niveau"),
+                        footer_action("+", "Niveau supérieur"),
+                        footer_action("B", "Sous-classe"),
+                        footer_action("F", "Ajouter don"),
+                        footer_action("X", "Retirer don"),
+                    ]),
+                    Tab::Journal => hints.extend([
+                        footer_action("O", "Histoire"),
+                        footer_action("N", "Notes"),
+                        footer_action("D", "Défenses"),
+                        footer_action("S", "Sens"),
+                        footer_action("P", "Maîtrises"),
+                        footer_action("V", "Vitesse"),
+                        footer_action("E", "Ajouter créature"),
+                        footer_action("M", "Modifier créature"),
+                        footer_action("X", "Retirer créature"),
+                    ]),
+                }
+                let mut lines = Vec::new();
+                // Quatre raccourcis par ligne gardent l'aide lisible sur les terminaux usuels.
+                for chunk in hints.chunks(4) {
+                    lines.push(footer_line(chunk));
+                }
+                lines
+            }
         }
     }
 
@@ -2169,7 +2521,7 @@ impl App {
                     self.compendium.classes.len()
                 )),
                 Line::from(format!(
-                    "Races : {}  |  Backgrounds : {}  |  Sorts : {}  |  Objets : {}",
+                    "Espèces : {}  |  Historiques : {}  |  Sorts : {}  |  Objets : {}",
                     self.compendium.races.len(),
                     self.compendium.backgrounds.len(),
                     self.compendium.spells.len(),
@@ -2188,15 +2540,23 @@ impl App {
         };
         let (title, lines) = match self.tab {
             Tab::Sheet => ("Fiche", self.sheet_lines(character)),
-            Tab::Equipment => ("Équipement", self.equipment_lines(character)),
-            Tab::Spells => ("Sorts et emplacements", self.spell_lines(character)),
-            Tab::Progression => ("Progression", self.progression_lines(character)),
+            Tab::Equipment => ("Inventaire", self.equipment_lines(character)),
+            Tab::Spells => ("Sorts", self.spell_lines(character)),
+            Tab::Progression => (
+                "Progression et capacités",
+                self.progression_lines(character),
+            ),
+            Tab::Journal => (
+                "Journal et éléments supplémentaires",
+                self.journal_lines(character),
+            ),
         };
         let tabs = Line::from(vec![
             Span::styled(" Fiche ", tab_style(self.tab == Tab::Sheet)),
-            Span::styled(" Équipement ", tab_style(self.tab == Tab::Equipment)),
+            Span::styled(" Inventaire ", tab_style(self.tab == Tab::Equipment)),
             Span::styled(" Sorts ", tab_style(self.tab == Tab::Spells)),
             Span::styled(" Progression ", tab_style(self.tab == Tab::Progression)),
+            Span::styled(" Journal ", tab_style(self.tab == Tab::Journal)),
         ]);
         let text = Text::from(lines);
         let block = Block::default().borders(Borders::ALL).title(title);
@@ -2222,7 +2582,11 @@ impl App {
             .races
             .iter()
             .find(|race| race.name == character.race);
-        let speed = race.and_then(|race| race.speed.as_deref()).unwrap_or("?");
+        let speed = if character.speed_override.trim().is_empty() {
+            race.and_then(|race| race.speed.as_deref()).unwrap_or("?")
+        } else {
+            &character.speed_override
+        };
         let armor_class = self.armor_class(character);
         let ability = character.ability_scores();
         let mut lines = vec![
@@ -2238,7 +2602,7 @@ impl App {
                 Style::default().add_modifier(Modifier::BOLD),
             )),
             Line::from(format!(
-                "{}{}  |  Niveau {}  |  Vitesse {} pi",
+                "{}{}  |  Niveau {}  |  Vitesse {}",
                 character.class,
                 character
                     .subclass
@@ -2363,7 +2727,7 @@ impl App {
             .collect::<Vec<_>>()
             .join("  ");
         lines.push(Line::from(format!("Jets de sauvegarde : {saves}")));
-        lines.push(Line::from("Compétences :"));
+        lines.push(Line::from("Compétences (maîtrise marquée d'un *) :"));
         for chunk in SKILLS.chunks(3) {
             lines.push(Line::from(
                 chunk
@@ -2380,7 +2744,12 @@ impl App {
                             } else {
                                 0
                             };
-                        format!("{} {:+}{}", name, bonus, if proficient { "*" } else { "" })
+                        format!(
+                            "{} {:+}{}",
+                            french_skill_name(name),
+                            bonus,
+                            if proficient { "*" } else { "" }
+                        )
                     })
                     .collect::<Vec<_>>()
                     .join("    "),
@@ -2394,6 +2763,33 @@ impl App {
                         "Incantation ({ability_name}) : DD {} | attaque {:+}",
                         8 + character.proficiency_bonus() + modifier,
                         character.proficiency_bonus() + modifier
+                    )));
+                }
+                lines.push(Line::from(format!(
+                    "Sens : perception passive {}{}",
+                    10 + Character::modifier(character.wisdom)
+                        + if character
+                            .skill_proficiencies
+                            .iter()
+                            .any(|skill| skill.eq_ignore_ascii_case("Perception"))
+                        {
+                            character.proficiency_bonus()
+                        } else {
+                            0
+                        },
+                    if character.senses.trim().is_empty() {
+                        String::new()
+                    } else {
+                        format!(" | {}", character.senses)
+                    }
+                )));
+                if !character.defences.trim().is_empty() {
+                    lines.push(Line::from(format!("Défenses : {}", character.defences)));
+                }
+                if !character.proficiencies_and_training.trim().is_empty() {
+                    lines.push(Line::from(format!(
+                        "Maîtrises et formations : {}",
+                        character.proficiencies_and_training
                     )));
                 }
             }
@@ -2411,7 +2807,7 @@ impl App {
                 if feature.name.eq_ignore_ascii_case("Description") {
                     continue;
                 }
-                lines.push(Line::from(format!("Background — {}", feature.name)));
+                lines.push(Line::from(format!("Historique — {}", feature.name)));
                 if let Some(text) = feature.text.first() {
                     lines.push(Line::from(format!("  {}", text.replace('\n', " "))));
                 }
@@ -2546,6 +2942,8 @@ impl App {
                 }
             }
         }
+        lines.push(Line::from(""));
+        lines.push(Line::from("Capacités et traits de classe :"));
         if let Some(class) = self.find_class(&character.class) {
             for autolevel in &class.autolevels {
                 let Ok(level) = autolevel.level.parse::<u8>() else {
@@ -2554,7 +2952,7 @@ impl App {
                 if level > character.level {
                     continue;
                 }
-                for feature in &autolevel.features {
+                for feature in self.class_features_at_level(&character.class, level) {
                     lines.push(Line::from(format!("Niv. {level} — {}", feature.name)));
                     if let Some(description) = feature.text.first() {
                         lines.push(Line::from(format!("  {}", description.replace('\n', " "))));
@@ -2563,6 +2961,86 @@ impl App {
             }
         } else {
             lines.push(Line::from("Classe absente du compendium."));
+        }
+        lines
+    }
+
+    /// Affiche l'histoire personnelle, le carnet de campagne et les éléments supplémentaires.
+    fn journal_lines(&self, character: &Character) -> Vec<Line<'static>> {
+        let mut lines = vec![
+            Line::from("o histoire | N notes d'aventure | D défenses | S sens | P maîtrises/formations | V vitesse"),
+            Line::from("E ajouter une créature/compagnon (nom | détails) | x retirer la ligne sélectionnée"),
+            Line::from(""),
+            Line::from(format!(
+                "Historique : {}",
+                if character.background.trim().is_empty() {
+                    "non renseigné"
+                } else {
+                    &character.background
+                }
+            )),
+            Line::from(format!(
+                "Vitesse : {}",
+                if character.speed_override.trim().is_empty() {
+                    self.compendium
+                        .races
+                        .iter()
+                        .find(|race| race.name == character.race)
+                        .and_then(|race| race.speed.as_deref())
+                        .unwrap_or("non renseignée")
+                } else {
+                    &character.speed_override
+                }
+            )),
+            Line::from(format!(
+                "Défenses : {}",
+                nonempty_or(&character.defences, "aucune note")
+            )),
+            Line::from(format!(
+                "Sens spéciaux : {}",
+                nonempty_or(&character.senses, "aucun sens spécial noté")
+            )),
+            Line::from(format!(
+                "Maîtrises et formations : {}",
+                nonempty_or(
+                    &character.proficiencies_and_training,
+                    "aucune note supplémentaire"
+                )
+            )),
+            Line::from(""),
+            Line::from("Histoire personnelle :"),
+        ];
+        append_text_lines(&mut lines, &character.backstory, "Histoire non renseignée.");
+        lines.push(Line::from(""));
+        lines.push(Line::from("Notes d'aventure :"));
+        append_text_lines(
+            &mut lines,
+            &character.adventure_notes,
+            "Aucune note pour le moment.",
+        );
+        lines.push(Line::from(""));
+        lines.push(Line::from("Créatures et compagnons :"));
+        if character.extras_creatures.is_empty() {
+            lines.push(Line::from("Aucune créature suivie."));
+        } else {
+            lines.extend(
+                character
+                    .extras_creatures
+                    .iter()
+                    .enumerate()
+                    .map(|(index, creature)| {
+                        let marker = if index == self.detail_index {
+                            "›"
+                        } else {
+                            " "
+                        };
+                        if creature.details.trim().is_empty() {
+                            Line::from(format!("{marker} {}", creature.name))
+                        } else {
+                            Line::from(format!("{marker} {} — {}", creature.name, creature.details))
+                        }
+                    }),
+            );
         }
         lines
     }
@@ -2648,7 +3126,7 @@ impl App {
                 4 => "Caractéristique SAG",
                 _ => "Caractéristique CHA",
             },
-            InputKind::BackgroundAbilityChoices => "Bonus de caractéristiques du background",
+            InputKind::BackgroundAbilityChoices => "Bonus de caractéristiques de l'historique",
             InputKind::EquipmentChoices => "Paquets d'équipement de départ (A ou B)",
             InputKind::EditScore(index) => match index {
                 0 => "Modifier FOR",
@@ -2666,6 +3144,15 @@ impl App {
             InputKind::Condition => "Ajouter une condition",
             InputKind::CombatAction => "Action, attaque ou note de combat",
             InputKind::Subclass => "Sous-classe (vide pour effacer)",
+            InputKind::Backstory => "Histoire personnelle",
+            InputKind::AdventureNotes => "Notes d'aventure",
+            InputKind::Defences => "Défenses et résistances",
+            InputKind::Senses => "Sens spéciaux",
+            InputKind::ProficienciesAndTraining => "Maîtrises et formations",
+            InputKind::Speed => "Vitesse personnalisée (vide = vitesse de l'espèce)",
+            InputKind::ExtraCreature | InputKind::EditExtraCreature(_) => {
+                "Créature ou compagnon (nom | détails)"
+            }
             InputKind::SkillChoices => "Maîtrises de compétences (séparées par des virgules)",
         };
         let help = match kind {
@@ -2726,18 +3213,47 @@ impl App {
                     "{descriptions}\nRépondez par A ou B pour chaque ligne, dans l'ordre, séparées par des virgules."
                 )
             }
+            InputKind::Backstory | InputKind::AdventureNotes => {
+                "\nCtrl+Entrée : nouvelle ligne | flèches : déplacer le curseur | Entrée : enregistrer | vide : effacer".into()
+            }
+            InputKind::Defences => {
+                "\nDécrivez résistances, immunités, vulnérabilités ou autres défenses. Entrée vide pour effacer.".into()
+            }
+            InputKind::Senses => {
+                "\nEx. vision dans le noir 18 m, vision véritable. La perception passive est calculée automatiquement.".into()
+            }
+            InputKind::ProficienciesAndTraining => {
+                "\nAjoutez langues, outils, armures et autres maîtrises acquises.".into()
+            }
+            InputKind::Speed => "\nEx. marche 9 m, nage 9 m. Vide pour revenir à la valeur de l'espèce.".into(),
             _ => String::new(),
         };
-        let popup = centered_rect(88, if help.is_empty() { 20 } else { 60 }, area);
-        frame.render_widget(Clear, popup);
-        let content = format!(
-            "{prompt}{help}\n\n> {}\n\nEntrée : valider  |  Échap : annuler",
-            self.input,
+        let popup = centered_rect(
+            88,
+            if matches!(kind, InputKind::Backstory | InputKind::AdventureNotes) {
+                80
+            } else if help.is_empty() {
+                20
+            } else {
+                60
+            },
+            area,
         );
+        frame.render_widget(Clear, popup);
+        let input_display = format!(
+            "{}|{}",
+            &self.input[..self.input_cursor],
+            &self.input[self.input_cursor..]
+        );
+        let content = format!(
+            "{prompt}{help}\n\n> {input_display}\n\nEntrée : enregistrer  |  Échap : annuler",
+        );
+        let cursor_line = self.input[..self.input_cursor].matches('\n').count();
         frame.render_widget(
             Paragraph::new(content)
                 .block(Block::default().borders(Borders::ALL).title("Saisie"))
-                .wrap(Wrap { trim: false }),
+                .wrap(Wrap { trim: false })
+                .scroll((cursor_line.saturating_sub(6) as u16, 0)),
             popup,
         );
     }
@@ -2747,7 +3263,7 @@ impl App {
         let title = match kind {
             PickKind::Race => "Choisir une espèce",
             PickKind::Class => "Choisir une classe",
-            PickKind::Background => "Choisir un background",
+            PickKind::Background => "Choisir un historique",
             PickKind::Item => "Ajouter un objet",
             PickKind::StartingItem => "Ajuster l'équipement de départ",
             PickKind::Spell => "Ajouter un sort de classe",
@@ -2776,11 +3292,15 @@ impl App {
             inner_chunks[0],
         );
         let options = self.picker_options(kind);
-        let start = self.picker_index.saturating_sub(8);
+        let (start, visible_count, selected_index) = picker_window(
+            options.len(),
+            self.picker_index,
+            usize::from(inner_chunks[1].height),
+        );
         let visible: Vec<ListItem> = options
             .iter()
             .skip(start)
-            .take(16)
+            .take(visible_count)
             .map(|option| {
                 let marker = if self.creation_choice_selected(kind, option) {
                     "[x] "
@@ -2829,7 +3349,7 @@ impl App {
                 ListItem::new(format!("{marker}{option}{description}"))
             })
             .collect();
-        let relative_index = self.picker_index - start;
+        let relative_index = selected_index - start;
         let mut state = ListState::default();
         if !visible.is_empty() {
             state.select(Some(relative_index.min(visible.len() - 1)));
@@ -3148,6 +3668,101 @@ fn ability_index(name: &str) -> Option<usize> {
     }
 }
 
+/// Calcule la fenêtre de choix en fonction de la hauteur disponible et de la sélection.
+fn picker_window(
+    option_count: usize,
+    selected_index: usize,
+    available_rows: usize,
+) -> (usize, usize, usize) {
+    let visible_count = option_count.min(available_rows);
+    let selected_index = selected_index.min(option_count.saturating_sub(1));
+    let start = selected_index
+        .saturating_sub(visible_count / 2)
+        .min(option_count.saturating_sub(visible_count));
+    (start, visible_count, selected_index)
+}
+
+/// Formate un raccourci avec sa touche en évidence et son libellé en français.
+fn footer_action(key: &str, label: &str) -> Vec<Span<'static>> {
+    let mnemonic_length = if key.chars().count() == 1
+        && label.chars().next().is_some_and(|first| {
+            first.eq_ignore_ascii_case(&key.chars().next().unwrap_or_default())
+        }) {
+        label.chars().next().map(char::len_utf8).unwrap_or(0)
+    } else {
+        0
+    };
+    let suffix = if mnemonic_length > 0 {
+        label[mnemonic_length..].to_owned()
+    } else {
+        format!(" {label}")
+    };
+    vec![
+        Span::styled(
+            format!("({key})"),
+            Style::default()
+                .fg(Color::Yellow)
+                .add_modifier(Modifier::BOLD),
+        ),
+        Span::raw(suffix),
+    ]
+}
+
+/// Assemble une rangée d'aide en séparant les raccourcis par un espacement uniforme.
+fn footer_line(actions: &[Vec<Span<'static>>]) -> Line<'static> {
+    let mut spans = Vec::new();
+    for (index, action) in actions.iter().enumerate() {
+        if index > 0 {
+            spans.push(Span::raw("  "));
+        }
+        spans.extend(action.iter().cloned());
+    }
+    Line::from(spans)
+}
+
+/// Traduit les noms des compétences de référence pour les afficher dans la fiche française.
+fn french_skill_name(name: &str) -> &str {
+    match name {
+        "Acrobatics" => "Acrobaties",
+        "Animal Handling" => "Dressage",
+        "Arcana" => "Arcanes",
+        "Athletics" => "Athlétisme",
+        "Deception" => "Tromperie",
+        "History" => "Histoire",
+        "Insight" => "Intuition",
+        "Intimidation" => "Intimidation",
+        "Investigation" => "Investigation",
+        "Medicine" => "Médecine",
+        "Nature" => "Nature",
+        "Perception" => "Perception",
+        "Performance" => "Représentation",
+        "Persuasion" => "Persuasion",
+        "Religion" => "Religion",
+        "Sleight of Hand" => "Escamotage",
+        "Stealth" => "Discrétion",
+        "Survival" => "Survie",
+        _ => name,
+    }
+}
+
+/// Retourne un texte de remplacement lorsqu'un champ libre est vide.
+fn nonempty_or<'a>(value: &'a str, fallback: &'a str) -> &'a str {
+    if value.trim().is_empty() {
+        fallback
+    } else {
+        value
+    }
+}
+
+/// Ajoute le contenu d'un texte long à une liste de lignes en conservant ses paragraphes.
+fn append_text_lines(lines: &mut Vec<Line<'static>>, text: &str, empty_message: &str) {
+    if text.is_empty() {
+        lines.push(Line::from(empty_message.to_owned()));
+    } else {
+        lines.extend(text.lines().map(|line| Line::from(line.to_owned())));
+    }
+}
+
 /// Valide une répartition légale d'ASI : +2 unique ou +1 sur deux caractéristiques distinctes.
 fn parse_ability_increases(input: &str) -> Option<Vec<AbilityIncrease>> {
     let increases: Vec<AbilityIncrease> = input
@@ -3316,7 +3931,8 @@ fn spell_detail(spell: &Spell) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::{
-        feat_available_for_advancement, parse_ability_increases, App, InputKind, PickKind,
+        feat_available_for_advancement, parse_ability_increases, picker_window, App, InputKind,
+        PickKind, Tab,
     };
     use crate::character::{Character, Resource};
     use crate::compendium::{
@@ -3490,6 +4106,127 @@ mod tests {
         assert!(parse_ability_increases("FOR+1,FOR+1").is_none());
         assert!(parse_ability_increases("FOR+3").is_none());
         assert!(parse_ability_increases("FOR+1,DEX+1,CON+0").is_none());
+    }
+
+    #[test]
+    fn picker_window_uses_available_rows_and_keeps_selection_visible() {
+        assert_eq!(picker_window(100, 0, 20), (0, 20, 0));
+        assert_eq!(picker_window(100, 50, 20), (40, 20, 50));
+        assert_eq!(picker_window(100, 99, 20), (80, 20, 99));
+        assert_eq!(picker_window(5, 3, 20), (0, 5, 3));
+        assert_eq!(picker_window(5, 3, 0), (3, 0, 3));
+    }
+
+    #[test]
+    fn footer_hints_follow_the_active_screen_and_highlight_shortcuts() {
+        let path = std::env::temp_dir().join(format!(
+            "dnd-tracker-footer-test-{}.json",
+            std::process::id()
+        ));
+        let mut app = App::new(test_compendium(), path.clone()).unwrap();
+        app.characters.push(Character {
+            name: "Footer".into(),
+            ..Character::default()
+        });
+
+        app.tab = Tab::Equipment;
+        let inventory = app
+            .footer_hints()
+            .iter()
+            .map(|line| {
+                line.spans
+                    .iter()
+                    .map(|span| span.content.to_string())
+                    .collect::<String>()
+            })
+            .collect::<String>();
+        assert!(inventory.contains("(I)nventaire"));
+        assert!(inventory.contains("(Espace) Équiper"));
+
+        app.tab = Tab::Journal;
+        let journal = app
+            .footer_hints()
+            .iter()
+            .map(|line| {
+                line.spans
+                    .iter()
+                    .map(|span| span.content.to_string())
+                    .collect::<String>()
+            })
+            .collect::<String>();
+        assert!(journal.contains("(O) Histoire"));
+        assert!(journal.contains("(N)otes"));
+        assert!(journal.contains("(M)odifier créature"));
+    }
+
+    #[test]
+    fn journal_edits_long_text_and_tracks_removable_creatures() {
+        let path = std::env::temp_dir().join(format!(
+            "dnd-tracker-journal-test-{}.json",
+            std::process::id()
+        ));
+        let mut app = App::new(test_compendium(), path.clone()).unwrap();
+        app.characters.push(Character {
+            name: "Journal".into(),
+            background: "Sage".into(),
+            backstory: "Ancien texte".into(),
+            ..Character::default()
+        });
+        app.tab = super::Tab::Journal;
+        app.handle_normal_key(crossterm::event::KeyEvent::new(
+            crossterm::event::KeyCode::Char('o'),
+            crossterm::event::KeyModifiers::NONE,
+        ));
+        app.handle_key(crossterm::event::KeyEvent::new(
+            crossterm::event::KeyCode::Left,
+            crossterm::event::KeyModifiers::NONE,
+        ));
+        app.handle_key(crossterm::event::KeyEvent::new(
+            crossterm::event::KeyCode::Char('!'),
+            crossterm::event::KeyModifiers::NONE,
+        ));
+        app.commit_input(InputKind::Backstory);
+        assert_eq!(app.characters[0].backstory, "Ancien text!e");
+
+        app.start_edit_input(InputKind::AdventureNotes, "Notes", "Première ligne");
+        app.handle_key(crossterm::event::KeyEvent::new(
+            crossterm::event::KeyCode::Enter,
+            crossterm::event::KeyModifiers::CONTROL,
+        ));
+        for character in "Deuxième ligne".chars() {
+            app.handle_key(crossterm::event::KeyEvent::new(
+                crossterm::event::KeyCode::Char(character),
+                crossterm::event::KeyModifiers::NONE,
+            ));
+        }
+        app.commit_input(InputKind::AdventureNotes);
+        assert_eq!(
+            app.characters[0].adventure_notes,
+            "Première ligne\nDeuxième ligne"
+        );
+
+        app.start_input(InputKind::ExtraCreature, "Créature");
+        app.input = "Familier | corbeau".into();
+        app.commit_input(InputKind::ExtraCreature);
+        assert_eq!(app.characters[0].extras_creatures[0].name, "Familier");
+        assert_eq!(app.characters[0].extras_creatures[0].details, "corbeau");
+        app.handle_normal_key(crossterm::event::KeyEvent::new(
+            crossterm::event::KeyCode::Char('M'),
+            crossterm::event::KeyModifiers::NONE,
+        ));
+        app.input = "Familier | corbeau géant".into();
+        app.commit_input(InputKind::EditExtraCreature(0));
+        assert_eq!(
+            app.characters[0].extras_creatures[0].details,
+            "corbeau géant"
+        );
+        app.remove_selected();
+        assert!(app.characters[0].extras_creatures.is_empty());
+        assert!(serde_json::from_str::<Character>("{}")
+            .unwrap()
+            .extras_creatures
+            .is_empty());
+        std::fs::remove_file(path).unwrap();
     }
 
     #[test]
