@@ -53,6 +53,8 @@ pub struct Character {
     pub prepared_spells: Vec<String>,
     /// Dons connus, incluant le don du background.
     pub feats: Vec<String>,
+    /// Choix de progression attribués à chaque niveau gagné.
+    pub advancements: Vec<LevelAdvancement>,
     /// Maîtrises de compétences acquises par classe ou background.
     pub skill_proficiencies: Vec<String>,
     /// Maîtrises de jets de sauvegarde accordées par la classe.
@@ -67,6 +69,32 @@ pub struct Character {
     pub conditions: Vec<String>,
     /// Journal limité des sorts, ressources, repos et actions de combat.
     pub combat_log: Vec<String>,
+}
+
+/// Choix de caractéristiques, don ou sous-classe validés à un niveau précis.
+#[derive(Debug, Serialize, Deserialize, Clone, Default)]
+#[serde(default)]
+pub struct LevelAdvancement {
+    /// Niveau auquel ces choix sont débloqués.
+    pub level: u8,
+    /// Bonus de caractéristiques appliqués par un choix d'amélioration.
+    pub ability_increases: Vec<AbilityIncrease>,
+    /// Don choisi à ce niveau, s'il y a lieu.
+    pub feat: Option<String>,
+    /// Indique que le personnage possédait déjà ce don avant cette progression.
+    pub feat_was_already_known: bool,
+    /// Sous-classe choisie, enregistrée sur son niveau de déblocage.
+    pub subclass: Option<String>,
+}
+
+/// Augmentation réversible d'une caractéristique gagnée en progressant.
+#[derive(Debug, Serialize, Deserialize, Clone, Default)]
+#[serde(default)]
+pub struct AbilityIncrease {
+    /// Index canonique de la caractéristique, de FOR (0) à CHA (5).
+    pub ability_index: usize,
+    /// Nombre de points ajoutés au score.
+    pub amount: i32,
 }
 
 /// Une pile d'objets d'inventaire et ses indicateurs d'équipement.
@@ -125,6 +153,7 @@ impl Default for Character {
             starting_equipment_choices: Vec::new(),
             prepared_spells: Vec::new(),
             feats: Vec::new(),
+            advancements: Vec::new(),
             skill_proficiencies: Vec::new(),
             saving_throw_proficiencies: Vec::new(),
             resources: Vec::new(),

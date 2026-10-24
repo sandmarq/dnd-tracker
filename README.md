@@ -9,7 +9,8 @@ Gestionnaire de personnages D&D 5e en Rust avec interface terminal (TUI). Le com
 - Application des maîtrises, du don et des bonus de caractéristiques du background.
 - Choix des paquets d'équipement de départ A/B, objets complémentaires et sorts de classe.
 - Fiche avec caractéristiques, modificateurs, compétences, sauvegardes, maîtrise, PV, CA et statistiques d'incantation.
-- Progression de classe, dons et sous-classe.
+- Progression guidée : choix de sous-classe, améliorations de caractéristiques ou dons éligibles aux niveaux débloqués; les dons de niveau 19 sont limités aux dons Boon.
+- Baisse de niveau avec retrait des choix de progression enregistrés et recalcul des ressources et emplacements encore accessibles.
 - Inventaire lié aux objets XML, équipement et calcul de CA.
 - Liste de sorts et suivi des emplacements.
 - Suivi de PV, PV temporaires, dés de vie et ressources; repos court et long.
@@ -82,7 +83,7 @@ Le compendium SQLite existant est actualisé depuis son XML source pour inclure 
 - `i` : ajouter un objet; `Espace` équipe/déséquipe; `x` retire l'objet sélectionné.
 - `p` : ajouter un sort de la classe; dans la vue des sorts, `1` à `9` choisit le niveau d'emplacement, `]` dépense un emplacement et `[` le restaure.
 - `f` : ajouter un don; `x` retire le don sélectionné dans la vue de progression.
-- `e` : définir l'XP totale; le niveau suit le seuil 5e 2024 correspondant. `l` : définir le niveau directement (sans modifier l'XP); `+` : gagner un niveau; `b` : saisir ou modifier une sous-classe.
+- `e` : définir l'XP totale; le niveau suit le seuil 5e 2024 correspondant. `l` : définir le niveau directement (sans modifier l'XP); `+` : gagner un niveau. Les changements de niveau ouvrent les choix de classe débloqués; une ASI accepte `FOR+2` ou deux caractéristiques distinctes à `+1`, sans dépasser 20. Les prérequis de dons non reconnus par le compendium sont refusés. `b` : saisir ou modifier une sous-classe.
 - `h` : saisir des dégâts (nombre négatif) ou des soins (nombre positif); les dégâts épuisent d'abord les PV temporaires.
 - `t` : définir les PV temporaires; `g` : lancer un dé de vie; `u` : dépenser la ressource sélectionnée.
 - `C` : ajouter une condition (ex. `stunned`, `fear` ou `Effrayé`); `x` dans la fiche retire la dernière condition. Les conditions ne sont pas effacées automatiquement lors d'un repos.

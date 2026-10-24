@@ -1,7 +1,7 @@
 //! État, règles de fiche et vues interactives du gestionnaire de personnages.
 
-use crate::character::{Character, InventorySlot, Resource};
-use crate::compendium::{Background, Class, Compendium, Item, Spell};
+use crate::character::{AbilityIncrease, Character, InventorySlot, LevelAdvancement, Resource};
+use crate::compendium::{Background, Class, Compendium, Feat, Item, Spell};
 use crate::storage;
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use rand::Rng;
@@ -78,6 +78,9 @@ enum PickKind {
     Spell,
     CastSpell,
     Feat,
+    SubclassChoice,
+    AdvancementChoice,
+    AdvancementFeat,
 }
 
 /// Type de saisie texte en cours et validation associée.
@@ -92,6 +95,7 @@ enum InputKind {
     TemporaryHitPoints,
     Experience,
     Level,
+    AdvancementAbilities,
     Condition,
     CombatAction,
     Subclass,
@@ -131,6 +135,24 @@ struct CreateWizard {
     equipment_warnings: Vec<String>,
 }
 
+/// Choix à faire à un niveau nouvellement atteint.
+#[derive(Clone, Copy)]
+enum PendingLevelChoice {
+    Subclass { level: u8 },
+    AbilityOrFeat { level: u8, feat_only: bool },
+}
+
+/// Progression suspendue jusqu'à la validation de tous les choix débloqués.
+struct LevelUpWizard {
+    target_level: u8,
+    pending: Vec<PendingLevelChoice>,
+    current_level: u8,
+    current_feat_only: bool,
+    current_advancement: Option<LevelAdvancement>,
+    completed: Vec<LevelAdvancement>,
+    experience: Option<u32>,
+}
+
 /// État applicatif et règles d'interaction de l'interface terminal.
 pub struct App {
     /// Données de référence disponibles pour les choix et calculs.
@@ -155,6 +177,8 @@ pub struct App {
     running: bool,
     /// Brouillon de création, présent uniquement pendant l'assistant.
     wizard: Option<CreateWizard>,
+    /// Choix requis pour la progression en cours, le cas échéant.
+    level_wizard: Option<LevelUpWizard>,
     /// Texte de la fenêtre de saisie courante.
     input: String,
     /// Texte de filtre du sélecteur.
@@ -186,6 +210,7 @@ impl App {
             mode: Mode::Normal,
             running: true,
             wizard: None,
+            level_wizard: None,
             input: String::new(),
             picker_query: String::new(),
             picker_index: 0,
@@ -214,6 +239,7 @@ impl App {
         if key.code == KeyCode::Esc {
             self.mode = Mode::Normal;
             self.wizard = None;
+            self.level_wizard = None;
             self.picker_query.clear();
             return;
         }
@@ -741,16 +767,17 @@ impl App {
                     self.mode = Mode::Normal;
                     return;
                 };
-                self.characters[index].experience = experience;
-                self.set_character_level(index, level);
-                append_combat_log(
-                    &mut self.characters[index],
-                    &format!("XP définis à {experience} (niveau {level})."),
-                );
-                self.persist(&format!(
-                    "XP mis à jour : {experience}; niveau correspondant : {level}."
-                ));
-                self.mode = Mode::Normal;
+                if level == self.characters[index].level {
+                    self.characters[index].experience = experience;
+                    append_combat_log(
+                        &mut self.characters[index],
+                        &format!("XP définis à {experience} (niveau {level})."),
+                    );
+                    self.persist(&format!("XP mis à jour : {experience}; niveau inchangé."));
+                    self.mode = Mode::Normal;
+                } else {
+                    self.begin_level_change(level, Some(experience));
+                }
             }
             InputKind::Level => {
                 let Ok(level) = self.input.trim().parse::<u8>() else {
@@ -761,17 +788,41 @@ impl App {
                     self.status = "Le niveau doit être compris entre 1 et 20.".into();
                     return;
                 }
-                let Some(index) = self.selected_character_index() else {
-                    self.mode = Mode::Normal;
+                self.begin_level_change(level, None);
+            }
+            InputKind::AdvancementAbilities => {
+                let Some(increases) = parse_ability_increases(&self.input) else {
+                    self.status =
+                        "Saisissez deux caractéristiques différentes en +1, ou une caractéristique en +2 (ex. FOR+2 ou FOR+1,DEX+1).".into();
                     return;
                 };
-                self.set_character_level(index, level);
-                append_combat_log(
-                    &mut self.characters[index],
-                    &format!("Niveau réglé manuellement à {level}."),
-                );
-                self.persist(&format!("Niveau défini à {level}."));
-                self.mode = Mode::Normal;
+                let current_scores = self
+                    .selected_character()
+                    .map(Character::ability_scores)
+                    .map(|mut scores| {
+                        if let Some(wizard) = &self.level_wizard {
+                            for applied in &wizard.completed {
+                                for increase in &applied.ability_increases {
+                                    scores[increase.ability_index] += increase.amount;
+                                }
+                            }
+                        }
+                        scores
+                    });
+                if current_scores.is_none_or(|scores| {
+                    increases
+                        .iter()
+                        .any(|increase| scores[increase.ability_index] + increase.amount > 20)
+                }) {
+                    self.status = "Une caractéristique ne peut pas dépasser 20.".into();
+                    return;
+                }
+                if let Some(wizard) = self.level_wizard.as_mut() {
+                    if let Some(advancement) = wizard.current_advancement.as_mut() {
+                        advancement.ability_increases = increases;
+                    }
+                }
+                self.finish_current_level_choice();
             }
             InputKind::Condition => {
                 let condition = normalize_condition(self.input.trim());
@@ -809,6 +860,17 @@ impl App {
             }
             InputKind::Subclass => {
                 let value = self.input.trim().to_owned();
+                if let Some(wizard) = self.level_wizard.as_mut() {
+                    if value.is_empty() {
+                        self.status = "Une sous-classe doit être choisie pour ce niveau.".into();
+                        return;
+                    }
+                    if let Some(advancement) = wizard.current_advancement.as_mut() {
+                        advancement.subclass = (!value.is_empty()).then_some(value);
+                        self.finish_current_level_choice();
+                        return;
+                    }
+                }
                 if let Some(character) = self.selected_character_mut() {
                     character.subclass = (!value.is_empty()).then_some(value);
                 }
@@ -891,6 +953,17 @@ impl App {
                 } else if kind == PickKind::CastSpell {
                     if let Some(value) = self.picker_options(kind).get(self.picker_index).cloned() {
                         self.cast_spell(&value);
+                    }
+                } else if kind == PickKind::AdvancementChoice {
+                    if let Some(choice) = self.picker_options(kind).get(self.picker_index) {
+                        if choice == "Amélioration de caractéristiques" {
+                            self.start_input(
+                                InputKind::AdvancementAbilities,
+                                "Répartition du bonus de caractéristiques",
+                            );
+                        } else {
+                            self.open_picker(PickKind::AdvancementFeat);
+                        }
                     }
                 } else {
                     let options = self.picker_options(kind);
@@ -986,6 +1059,47 @@ impl App {
                 .selected_character()
                 .map(|character| character.prepared_spells.clone())
                 .unwrap_or_default(),
+            PickKind::SubclassChoice => self.subclass_options(),
+            PickKind::AdvancementChoice => vec![
+                self.level_wizard
+                    .as_ref()
+                    .is_none_or(|wizard| !wizard.current_feat_only)
+                    .then_some("Amélioration de caractéristiques".into()),
+                Some("Choisir un don".into()),
+            ]
+            .into_iter()
+            .flatten()
+            .collect(),
+            PickKind::AdvancementFeat => {
+                let Some(character) = self.selected_character() else {
+                    return Vec::new();
+                };
+                let level = self
+                    .level_wizard
+                    .as_ref()
+                    .map_or(1, |wizard| wizard.current_level);
+                let feat_only = self
+                    .level_wizard
+                    .as_ref()
+                    .is_some_and(|wizard| wizard.current_feat_only);
+                let can_cast_spells = self
+                    .find_class(&character.class)
+                    .is_some_and(|class| class.spell_ability.is_some());
+                self.compendium
+                    .feats
+                    .iter()
+                    .filter(|feat| {
+                        feat_available_for_advancement(
+                            feat,
+                            level,
+                            character,
+                            can_cast_spells,
+                            feat_only,
+                        )
+                    })
+                    .map(|feat| feat.name.clone())
+                    .collect()
+            }
             PickKind::Feat => self
                 .compendium
                 .feats
@@ -1057,6 +1171,36 @@ impl App {
                 self.mode = Mode::Normal;
             }
             PickKind::CastSpell => self.cast_spell(&value),
+            PickKind::SubclassChoice => {
+                if let Some(wizard) = self.level_wizard.as_mut() {
+                    if let Some(advancement) = wizard.current_advancement.as_mut() {
+                        advancement.subclass = Some(value);
+                    }
+                }
+                self.finish_current_level_choice();
+            }
+            PickKind::AdvancementChoice => {
+                if value == "Amélioration de caractéristiques" {
+                    self.start_input(
+                        InputKind::AdvancementAbilities,
+                        "Répartition du bonus de caractéristiques",
+                    );
+                } else {
+                    self.open_picker(PickKind::AdvancementFeat);
+                }
+            }
+            PickKind::AdvancementFeat => {
+                let feat_was_already_known = self
+                    .selected_character()
+                    .is_some_and(|character| character.feats.contains(&value));
+                if let Some(wizard) = self.level_wizard.as_mut() {
+                    if let Some(advancement) = wizard.current_advancement.as_mut() {
+                        advancement.feat = Some(value);
+                        advancement.feat_was_already_known = feat_was_already_known;
+                    }
+                }
+                self.finish_current_level_choice();
+            }
             PickKind::Feat => {
                 if let Some(character) = self.selected_character_mut() {
                     if !character.feats.contains(&value) {
@@ -1238,20 +1382,362 @@ impl App {
 
     /// Augmente d'un niveau en actualisant PV, progression et journal de combat.
     fn level_up(&mut self) {
-        let Some(index) = self.selected_character_index() else {
+        let Some(character) = self.selected_character() else {
             return;
         };
-        if self.characters[index].level >= 20 {
+        if character.level >= 20 {
             self.status = "Le personnage est déjà niveau 20.".into();
             return;
         }
-        let level = self.characters[index].level + 1;
-        self.set_character_level(index, level);
+        self.begin_level_change(character.level + 1, None);
+    }
+
+    /// Démarre une progression vers un niveau cible en collectant les choix requis.
+    fn begin_level_change(&mut self, target_level: u8, experience: Option<u32>) {
+        let Some(index) = self.selected_character_index() else {
+            self.mode = Mode::Normal;
+            return;
+        };
+        let current_level = self.characters[index].level;
+        if target_level == current_level {
+            self.mode = Mode::Normal;
+            return;
+        }
+        if target_level < current_level {
+            self.apply_level_decrease(index, target_level);
+            if let Some(experience) = experience {
+                self.characters[index].experience = experience;
+            }
+            self.persist(&format!(
+                "Niveau réduit à {target_level}; choix de progression retirés."
+            ));
+            self.mode = Mode::Normal;
+            return;
+        }
+
+        let class = self.find_class(&self.characters[index].class).cloned();
+        let mut pending = Vec::new();
+        if let Some(class) = class {
+            if self.characters[index].subclass.is_none() {
+                if let Some(unlock_level) = self.subclass_unlock_level(&class.name) {
+                    if unlock_level <= current_level && unlock_level <= target_level {
+                        pending.push(PendingLevelChoice::Subclass {
+                            level: unlock_level,
+                        });
+                    }
+                }
+            }
+            for level in current_level + 1..=target_level {
+                let features = class
+                    .autolevels
+                    .iter()
+                    .filter(|autolevel| autolevel.level.parse::<u8>().ok() == Some(level))
+                    .flat_map(|autolevel| &autolevel.features);
+                let mut subclass_unlocked = false;
+                let mut ability_improvement = false;
+                for feature in features {
+                    let name = feature.name.to_ascii_lowercase();
+                    subclass_unlocked |= name.starts_with("level ") && name.ends_with("subclass");
+                    ability_improvement |=
+                        name.contains("ability score improvement") || name.contains("epic boon");
+                }
+                if subclass_unlocked
+                    && self.characters[index].subclass.is_none()
+                    && !pending
+                        .iter()
+                        .any(|choice| matches!(choice, PendingLevelChoice::Subclass { .. }))
+                {
+                    pending.push(PendingLevelChoice::Subclass { level });
+                }
+                if ability_improvement {
+                    pending.push(PendingLevelChoice::AbilityOrFeat {
+                        level,
+                        feat_only: class
+                            .autolevels
+                            .iter()
+                            .filter(|autolevel| autolevel.level.parse::<u8>().ok() == Some(level))
+                            .flat_map(|autolevel| &autolevel.features)
+                            .any(|feature| feature.name.to_ascii_lowercase().contains("epic boon")),
+                    });
+                }
+            }
+        }
+        self.level_wizard = Some(LevelUpWizard {
+            target_level,
+            pending,
+            current_level,
+            current_feat_only: false,
+            current_advancement: None,
+            completed: Vec::new(),
+            experience,
+        });
+        self.continue_level_change();
+    }
+
+    /// Ouvre le prochain choix débloqué, puis finalise le changement quand la file est vide.
+    fn continue_level_change(&mut self) {
+        let has_pending = self
+            .level_wizard
+            .as_ref()
+            .is_some_and(|wizard| !wizard.pending.is_empty());
+        if !has_pending {
+            self.finish_level_change();
+            return;
+        }
+        let Some(wizard) = self.level_wizard.as_mut() else {
+            return;
+        };
+        let choice = wizard.pending[0];
+        wizard.pending.remove(0);
+        let level = match choice {
+            PendingLevelChoice::Subclass { level }
+            | PendingLevelChoice::AbilityOrFeat { level, .. } => level,
+        };
+        wizard.current_level = level;
+        wizard.current_feat_only = matches!(
+            choice,
+            PendingLevelChoice::AbilityOrFeat {
+                feat_only: true,
+                ..
+            }
+        );
+        wizard.current_advancement = Some(LevelAdvancement {
+            level,
+            ..LevelAdvancement::default()
+        });
+        match choice {
+            PendingLevelChoice::Subclass { .. } => {
+                let options = self.subclass_options();
+                if options.is_empty() {
+                    self.start_input(InputKind::Subclass, "Sous-classe à choisir");
+                } else {
+                    self.open_picker(PickKind::SubclassChoice);
+                    self.status = format!("Niveau {level} : choisissez votre sous-classe.");
+                }
+            }
+            PendingLevelChoice::AbilityOrFeat { feat_only, .. } => {
+                self.open_picker(PickKind::AdvancementChoice);
+                self.status = format!(
+                    "Niveau {level} : {}",
+                    if feat_only {
+                        "choisissez un don de type Epic Boon."
+                    } else {
+                        "choisissez une amélioration de caractéristique ou un don."
+                    }
+                );
+            }
+        }
+    }
+
+    /// Enregistre le choix courant dans le brouillon et affiche le prochain choix requis.
+    fn finish_current_level_choice(&mut self) {
+        if let Some(wizard) = self.level_wizard.as_mut() {
+            if let Some(advancement) = wizard.current_advancement.take() {
+                wizard.completed.push(advancement);
+            }
+        }
+        self.continue_level_change();
+    }
+
+    /// Applique les choix validés et finalise la transition de niveau.
+    fn finish_level_change(&mut self) {
+        let Some(wizard) = self.level_wizard.take() else {
+            return;
+        };
+        let Some(index) = self.selected_character_index() else {
+            self.mode = Mode::Normal;
+            return;
+        };
+        let mut unlocked_features = Vec::new();
+        for advancement in wizard.completed {
+            for increase in &advancement.ability_increases {
+                let score = self.characters[index].ability_scores()[increase.ability_index];
+                self.characters[index]
+                    .set_ability_score(increase.ability_index, score + increase.amount);
+            }
+            if let Some(feat) = &advancement.feat {
+                if !self.characters[index].feats.contains(feat) {
+                    self.characters[index].feats.push(feat.clone());
+                }
+            }
+            if let Some(subclass) = &advancement.subclass {
+                self.characters[index].subclass = Some(subclass.clone());
+            }
+            unlocked_features.push(advancement.level);
+            self.characters[index].advancements.push(advancement);
+        }
+        self.set_character_level(index, wizard.target_level);
+        if let Some(experience) = wizard.experience {
+            self.characters[index].experience = experience;
+        }
+        let level = self.characters[index].level;
         append_combat_log(
             &mut self.characters[index],
-            &format!("Niveau gagné : {level}."),
+            &format!("Niveau atteint : {level}."),
         );
-        self.persist("Niveau gagné; PV et ressources de classe actualisés.");
+        let feature_summary = unlocked_features
+            .iter()
+            .flat_map(|level| self.class_features_at_level(&self.characters[index].class, *level))
+            .map(|feature| feature.name.clone())
+            .collect::<Vec<_>>();
+        self.persist(&if feature_summary.is_empty() {
+            format!("Niveau {level} atteint.")
+        } else {
+            format!(
+                "Niveau {level} atteint. Nouvelles capacités : {}.",
+                feature_summary.join(", ")
+            )
+        });
+        self.mode = Mode::Normal;
+    }
+
+    /// Annule les choix propres aux niveaux perdus avant de recalculer le personnage.
+    fn apply_level_decrease(&mut self, index: usize, target_level: u8) {
+        let lost: Vec<LevelAdvancement> = self.characters[index]
+            .advancements
+            .iter()
+            .filter(|advancement| advancement.level > target_level)
+            .cloned()
+            .collect();
+        for advancement in &lost {
+            for increase in &advancement.ability_increases {
+                if let Some(score) = self.characters[index]
+                    .ability_scores()
+                    .get(increase.ability_index)
+                {
+                    self.characters[index]
+                        .set_ability_score(increase.ability_index, score - increase.amount);
+                }
+            }
+        }
+        let remaining_feats: Vec<String> = self.characters[index]
+            .advancements
+            .iter()
+            .filter(|advancement| advancement.level <= target_level)
+            .filter_map(|advancement| advancement.feat.clone())
+            .collect();
+        let lost_feats: Vec<String> = lost
+            .iter()
+            .filter(|advancement| !advancement.feat_was_already_known)
+            .filter_map(|advancement| advancement.feat.clone())
+            .collect();
+        let background_feat = self
+            .find_background(&self.characters[index].background)
+            .and_then(background_feat);
+        self.characters[index].feats.retain(|feat| {
+            !lost_feats.contains(feat)
+                || remaining_feats.contains(feat)
+                || background_feat.as_ref() == Some(feat)
+        });
+        self.characters[index]
+            .advancements
+            .retain(|advancement| advancement.level <= target_level);
+        let subclass_level = self
+            .subclass_unlock_level(&self.characters[index].class)
+            .unwrap_or(u8::MAX);
+        if target_level < subclass_level {
+            self.characters[index].subclass = None;
+        } else if let Some(subclass) = self.characters[index]
+            .advancements
+            .iter()
+            .rev()
+            .find_map(|advancement| advancement.subclass.clone())
+        {
+            self.characters[index].subclass = Some(subclass);
+        }
+        self.set_character_level(index, target_level);
+        append_combat_log(
+            &mut self.characters[index],
+            &format!("Niveau réduit à {target_level}; avantages des niveaux perdus retirés."),
+        );
+    }
+
+    /// Retourne les noms de sous-classes répertoriés sous la classe du personnage.
+    fn subclass_options(&self) -> Vec<String> {
+        let Some(class_name) = self
+            .selected_character()
+            .map(|character| character.class.as_str())
+        else {
+            return Vec::new();
+        };
+        let base_name = class_name.split(" [").next().unwrap_or(class_name);
+        let prefix = format!("{base_name} Subclass:");
+        let mut options: Vec<String> = self
+            .find_class(class_name)
+            .into_iter()
+            .flat_map(|class| &class.autolevels)
+            .flat_map(|autolevel| &autolevel.features)
+            .filter_map(|feature| feature.name.strip_prefix(&prefix))
+            .map(str::trim)
+            .filter(|name| !name.is_empty())
+            .map(str::to_owned)
+            .collect();
+        options.sort();
+        options.dedup();
+        options
+    }
+
+    /// Trouve le niveau auquel la classe propose normalement une sous-classe.
+    fn subclass_unlock_level(&self, class_name: &str) -> Option<u8> {
+        self.find_class(class_name)?
+            .autolevels
+            .iter()
+            .filter_map(|autolevel| {
+                let level = autolevel.level.parse::<u8>().ok()?;
+                autolevel
+                    .features
+                    .iter()
+                    .any(|feature| {
+                        feature.name.to_ascii_lowercase().starts_with("level ")
+                            && feature.name.to_ascii_lowercase().ends_with("subclass")
+                    })
+                    .then_some(level)
+            })
+            .min()
+    }
+
+    /// Retourne les capacités non optionnelles débloquées par la classe à un niveau.
+    fn class_features_at_level(
+        &self,
+        class_name: &str,
+        level: u8,
+    ) -> Vec<&crate::compendium::Feature> {
+        let Some(class) = self.find_class(class_name) else {
+            return Vec::new();
+        };
+        let subclass = self
+            .selected_character()
+            .and_then(|character| character.subclass.as_deref());
+        let base_name = class_name.split(" [").next().unwrap_or(class_name);
+        let subclass_option_prefix = format!("{base_name} Subclass:");
+        class
+            .autolevels
+            .iter()
+            .filter(|autolevel| autolevel.level.parse::<u8>().ok() == Some(level))
+            .flat_map(|autolevel| &autolevel.features)
+            .filter(|feature| {
+                let name = feature.name.to_ascii_lowercase();
+                if name.starts_with("level ") && name.ends_with(" subclass") {
+                    return false;
+                }
+                if feature.name.starts_with(&subclass_option_prefix) {
+                    return subclass.is_some_and(|subclass| {
+                        feature
+                            .name
+                            .strip_prefix(&subclass_option_prefix)
+                            .is_some_and(|name| name.trim().eq_ignore_ascii_case(subclass))
+                    });
+                }
+                if let Some(option) = self
+                    .subclass_options()
+                    .iter()
+                    .find(|option| feature.name.ends_with(&format!("({option})")))
+                {
+                    return subclass.is_some_and(|subclass| subclass.eq_ignore_ascii_case(option));
+                }
+                !name.starts_with(&format!("{} subclass", base_name.to_ascii_lowercase()))
+            })
+            .collect()
     }
 
     /// Applique un niveau explicite en recalculant les valeurs dépendantes sans effacer les dépenses.
@@ -2176,6 +2662,7 @@ impl App {
             InputKind::TemporaryHitPoints => "Points de vie temporaires",
             InputKind::Experience => "XP totale",
             InputKind::Level => "Niveau (1–20)",
+            InputKind::AdvancementAbilities => "Amélioration de caractéristiques",
             InputKind::Condition => "Ajouter une condition",
             InputKind::CombatAction => "Action, attaque ou note de combat",
             InputKind::Subclass => "Sous-classe (vide pour effacer)",
@@ -2224,6 +2711,9 @@ impl App {
                     )
                 })
                 .unwrap_or_default(),
+            InputKind::AdvancementAbilities => {
+                "\nSaisissez FOR+2 ou deux caractéristiques distinctes à +1 (ex. FOR+1,DEX+1). Maximum : 20.".into()
+            }
             InputKind::EquipmentChoices => {
                 let descriptions = self
                     .equipment_package_options()
@@ -2263,6 +2753,9 @@ impl App {
             PickKind::Spell => "Ajouter un sort de classe",
             PickKind::CastSpell => "Lancer un sort préparé",
             PickKind::Feat => "Ajouter un don",
+            PickKind::SubclassChoice => "Choisir une sous-classe",
+            PickKind::AdvancementChoice => "Choix de progression",
+            PickKind::AdvancementFeat => "Choisir un don éligible",
         };
         let popup = centered_rect(78, 80, area);
         frame.render_widget(Clear, popup);
@@ -2301,6 +2794,34 @@ impl App {
                 let description = if kind == PickKind::Background {
                     self.find_background(option)
                         .map(background_picker_summary)
+                        .unwrap_or_default()
+                } else if kind == PickKind::SubclassChoice {
+                    let class_name = self
+                        .selected_character()
+                        .map(|character| character.class.as_str())
+                        .unwrap_or_default();
+                    let base_name = class_name.split(" [").next().unwrap_or(class_name);
+                    let feature_name = format!("{base_name} Subclass: {option}");
+                    self.find_class(class_name)
+                        .into_iter()
+                        .flat_map(|class| &class.autolevels)
+                        .flat_map(|autolevel| &autolevel.features)
+                        .find(|feature| feature.name == feature_name)
+                        .and_then(|feature| feature.text.first())
+                        .map(|text| {
+                            let compact = text.replace('\n', " ");
+                            let preview: String = compact.chars().take(100).collect();
+                            format!(" — {preview}")
+                        })
+                        .unwrap_or_default()
+                } else if kind == PickKind::AdvancementFeat {
+                    self.compendium
+                        .feats
+                        .iter()
+                        .find(|feat| feat.name == *option)
+                        .and_then(|feat| feat.prerequisite.as_deref())
+                        .filter(|prerequisite| !prerequisite.trim().is_empty())
+                        .map(|prerequisite| format!(" — prérequis : {prerequisite}"))
                         .unwrap_or_default()
                 } else {
                     String::new()
@@ -2627,6 +3148,79 @@ fn ability_index(name: &str) -> Option<usize> {
     }
 }
 
+/// Valide une répartition légale d'ASI : +2 unique ou +1 sur deux caractéristiques distinctes.
+fn parse_ability_increases(input: &str) -> Option<Vec<AbilityIncrease>> {
+    let increases: Vec<AbilityIncrease> = input
+        .split(',')
+        .map(|part| {
+            let (ability, amount) = part.trim().split_once('+')?;
+            Some(AbilityIncrease {
+                ability_index: ability_index(ability)?,
+                amount: amount.trim().parse().ok()?,
+            })
+        })
+        .collect::<Option<_>>()?;
+    let total: i32 = increases.iter().map(|increase| increase.amount).sum();
+    let valid_distribution = (increases.len() == 1 && increases[0].amount == 2)
+        || (increases.len() == 2 && increases.iter().all(|increase| increase.amount == 1));
+    let distinct_abilities = increases
+        .iter()
+        .map(|increase| increase.ability_index)
+        .collect::<std::collections::HashSet<_>>()
+        .len()
+        == increases.len();
+    (total == 2 && valid_distribution && distinct_abilities).then_some(increases)
+}
+
+/// Vérifie uniquement les prérequis explicitement interprétables dans le compendium.
+fn feat_available_for_advancement(
+    feat: &Feat,
+    level: u8,
+    character: &Character,
+    can_cast_spells: bool,
+    feat_only: bool,
+) -> bool {
+    let name = feat.name.to_ascii_lowercase();
+    if name.starts_with("origin:") || (feat_only && !name.starts_with("boon of ")) {
+        return false;
+    }
+    let Some(prerequisite) = feat
+        .prerequisite
+        .as_deref()
+        .filter(|prerequisite| !prerequisite.trim().is_empty())
+    else {
+        return !feat_only;
+    };
+
+    prerequisite
+        .split(',')
+        .map(str::trim)
+        .filter(|requirement| !requirement.is_empty())
+        .all(|requirement| {
+            let normalized = requirement.to_ascii_lowercase();
+            if let Some(level_requirement) = normalized.strip_prefix("level ") {
+                let minimum = level_requirement.trim_end_matches('+').parse::<u8>().ok();
+                return minimum.is_some_and(|minimum| level >= minimum);
+            }
+
+            if normalized.contains("spellcasting") || normalized.contains("pact magic") {
+                return can_cast_spells;
+            }
+
+            let Some((abilities, score_requirement)) = requirement.rsplit_once(' ') else {
+                return false;
+            };
+            let minimum = score_requirement.trim_end_matches('+').parse::<i32>().ok();
+            let Some(minimum) = minimum else {
+                return false;
+            };
+            abilities
+                .split(" or ")
+                .filter_map(ability_index)
+                .any(|index| character.ability_scores()[index] >= minimum)
+        })
+}
+
 /// Choisit le style visuel actif ou inactif d'un onglet.
 fn tab_style(active: bool) -> Style {
     if active {
@@ -2721,7 +3315,9 @@ fn spell_detail(spell: &Spell) -> Option<String> {
 
 #[cfg(test)]
 mod tests {
-    use super::{App, InputKind};
+    use super::{
+        feat_available_for_advancement, parse_ability_increases, App, InputKind, PickKind,
+    };
     use crate::character::{Character, Resource};
     use crate::compendium::{
         Autolevel, Background, Class, Compendium, Counter, Feat, Feature, Item, Spell,
@@ -2881,7 +3477,180 @@ mod tests {
         app.commit_input(InputKind::Level);
         assert_eq!(app.characters[0].level, 1);
         assert_eq!(app.characters[0].current_hit_dice, 0);
+        assert_eq!(app.characters[0].spell_slots_max[1], 2);
+        assert_eq!(app.characters[0].resources[0].maximum, 1);
         assert_eq!(crate::storage::load(&path).unwrap()[0].name, "Ada");
+        std::fs::remove_file(path).unwrap();
+    }
+
+    #[test]
+    fn ability_increase_choices_follow_asi_distribution_rules() {
+        assert!(parse_ability_increases("FOR+2").is_some());
+        assert!(parse_ability_increases("FOR+1,DEX+1").is_some());
+        assert!(parse_ability_increases("FOR+1,FOR+1").is_none());
+        assert!(parse_ability_increases("FOR+3").is_none());
+        assert!(parse_ability_increases("FOR+1,DEX+1,CON+0").is_none());
+    }
+
+    #[test]
+    fn feat_prerequisites_are_checked_conservatively() {
+        let character = Character {
+            dexterity: 13,
+            ..Character::default()
+        };
+        let level_feat = Feat {
+            name: "Skilled".into(),
+            prerequisite: Some("Level 4+, Dexterity 13+".into()),
+            ..Feat::default()
+        };
+        assert!(!feat_available_for_advancement(
+            &level_feat,
+            3,
+            &character,
+            false,
+            false
+        ));
+        assert!(feat_available_for_advancement(
+            &level_feat,
+            4,
+            &character,
+            false,
+            false
+        ));
+        let unsupported = Feat {
+            prerequisite: Some("Proficiency with heavy armor".into()),
+            ..level_feat.clone()
+        };
+        assert!(!feat_available_for_advancement(
+            &unsupported,
+            4,
+            &character,
+            false,
+            false
+        ));
+        let boon = Feat {
+            name: "Boon of Combat Prowess".into(),
+            prerequisite: Some("Level 19+".into()),
+            ..Feat::default()
+        };
+        assert!(!feat_available_for_advancement(
+            &boon, 18, &character, true, true
+        ));
+        assert!(feat_available_for_advancement(
+            &boon, 19, &character, true, true
+        ));
+    }
+
+    #[test]
+    fn monk_level_choices_are_applied_and_reversed_when_deleveling() {
+        let path = std::env::temp_dir().join(format!(
+            "dnd-tracker-progression-test-{}.json",
+            std::process::id()
+        ));
+        let mut compendium = test_compendium();
+        compendium.classes.push(Class {
+            name: "Monk".into(),
+            hd: Some("8".into()),
+            autolevels: vec![
+                Autolevel {
+                    level: "1".into(),
+                    ..Autolevel::default()
+                },
+                Autolevel {
+                    level: "3".into(),
+                    features: vec![
+                        Feature {
+                            name: "Level 3: Monk Subclass".into(),
+                            ..Feature::default()
+                        },
+                        Feature {
+                            name: "Monk Subclass: Warrior of Mercy".into(),
+                            text: vec!["Mercy subclass details".into()],
+                        },
+                        Feature {
+                            name: "Monk Subclass: Warrior of Shadow".into(),
+                            ..Feature::default()
+                        },
+                        Feature {
+                            name: "Level 3: Implements of Mercy (Warrior of Mercy)".into(),
+                            ..Feature::default()
+                        },
+                        Feature {
+                            name: "Level 3: Shadow Arts (Warrior of Shadow)".into(),
+                            ..Feature::default()
+                        },
+                    ],
+                    ..Autolevel::default()
+                },
+                Autolevel {
+                    level: "4".into(),
+                    features: vec![Feature {
+                        name: "Ability Score Improvement".into(),
+                        ..Feature::default()
+                    }],
+                    ..Autolevel::default()
+                },
+            ],
+            ..Class::default()
+        });
+        let mut app = App::new(compendium, path.clone()).unwrap();
+        app.characters.push(Character {
+            name: "Mira".into(),
+            class: "Monk".into(),
+            level: 2,
+            strength: 18,
+            current_hp: 12,
+            max_hp: 12,
+            current_hit_dice: 2,
+            ..Character::default()
+        });
+
+        app.begin_level_change(3, None);
+        assert!(matches!(
+            app.mode,
+            super::Mode::Picker(PickKind::SubclassChoice)
+        ));
+        assert_eq!(
+            app.picker_options(PickKind::SubclassChoice),
+            ["Warrior of Mercy", "Warrior of Shadow"]
+        );
+        app.choose_option(PickKind::SubclassChoice, "Warrior of Mercy".into());
+        assert_eq!(
+            app.characters[0].subclass.as_deref(),
+            Some("Warrior of Mercy")
+        );
+        assert_eq!(app.characters[0].level, 3);
+        let level_three_features = app
+            .class_features_at_level("Monk", 3)
+            .iter()
+            .map(|feature| feature.name.as_str())
+            .collect::<Vec<_>>();
+        assert!(level_three_features
+            .iter()
+            .any(|name| name.contains("Implements of Mercy")));
+        assert!(!level_three_features
+            .iter()
+            .any(|name| name.contains("Shadow Arts")));
+
+        app.begin_level_change(4, None);
+        assert_eq!(
+            app.picker_options(PickKind::AdvancementChoice),
+            ["Amélioration de caractéristiques", "Choisir un don"]
+        );
+        app.choose_option(
+            PickKind::AdvancementChoice,
+            "Amélioration de caractéristiques".into(),
+        );
+        app.input = "FOR+2".into();
+        app.commit_input(InputKind::AdvancementAbilities);
+        assert_eq!(app.characters[0].strength, 20);
+        assert_eq!(app.characters[0].advancements.len(), 2);
+
+        app.begin_level_change(2, None);
+        assert_eq!(app.characters[0].level, 2);
+        assert_eq!(app.characters[0].strength, 18);
+        assert_eq!(app.characters[0].subclass, None);
+        assert!(app.characters[0].advancements.is_empty());
         std::fs::remove_file(path).unwrap();
     }
 
