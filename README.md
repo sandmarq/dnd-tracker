@@ -2,6 +2,10 @@
 
 Gestionnaire de personnages D&D 5e en Rust avec interface terminal (TUI). Le compendium XML est généré à partir de [FightClub5eXML](https://github.com/vidalvanbergen/FightClub5eXML); il n'est pas inclus dans ce dépôt. Après l'import initial, les données du compendium sont mises en cache dans une base SQLite locale pour accélérer les lancements suivants.
 
+Consultez le [guide utilisateur complet](docs/guide-utilisateur.md) pour les
+prérequis, l'installation, l'import du compendium, les sections de la fiche,
+tous les raccourcis clavier, les sauvegardes et les limites connues.
+
 ## Fonctionnalités
 
 - Plusieurs personnages avec sauvegarde JSON automatique.

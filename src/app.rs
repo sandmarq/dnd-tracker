@@ -2765,34 +2765,34 @@ impl App {
                         character.proficiency_bonus() + modifier
                     )));
                 }
-                lines.push(Line::from(format!(
-                    "Sens : perception passive {}{}",
-                    10 + Character::modifier(character.wisdom)
-                        + if character
-                            .skill_proficiencies
-                            .iter()
-                            .any(|skill| skill.eq_ignore_ascii_case("Perception"))
-                        {
-                            character.proficiency_bonus()
-                        } else {
-                            0
-                        },
-                    if character.senses.trim().is_empty() {
-                        String::new()
-                    } else {
-                        format!(" | {}", character.senses)
-                    }
-                )));
-                if !character.defences.trim().is_empty() {
-                    lines.push(Line::from(format!("Défenses : {}", character.defences)));
-                }
-                if !character.proficiencies_and_training.trim().is_empty() {
-                    lines.push(Line::from(format!(
-                        "Maîtrises et formations : {}",
-                        character.proficiencies_and_training
-                    )));
-                }
             }
+        }
+        lines.push(Line::from(format!(
+            "Sens : perception passive {}{}",
+            10 + Character::modifier(character.wisdom)
+                + if character
+                    .skill_proficiencies
+                    .iter()
+                    .any(|skill| skill.eq_ignore_ascii_case("Perception"))
+                {
+                    character.proficiency_bonus()
+                } else {
+                    0
+                },
+            if character.senses.trim().is_empty() {
+                String::new()
+            } else {
+                format!(" | {}", character.senses)
+            }
+        )));
+        if !character.defences.trim().is_empty() {
+            lines.push(Line::from(format!("Défenses : {}", character.defences)));
+        }
+        if !character.proficiencies_and_training.trim().is_empty() {
+            lines.push(Line::from(format!(
+                "Maîtrises et formations : {}",
+                character.proficiencies_and_training
+            )));
         }
         if let Some(race) = race {
             for trait_entry in &race.traits {
@@ -4157,6 +4157,36 @@ mod tests {
         assert!(journal.contains("(O) Histoire"));
         assert!(journal.contains("(N)otes"));
         assert!(journal.contains("(M)odifier créature"));
+    }
+
+    #[test]
+    fn custom_senses_and_defences_show_for_non_spellcasting_classes() {
+        let path = std::env::temp_dir().join(format!(
+            "dnd-tracker-sheet-fields-test-{}.json",
+            std::process::id()
+        ));
+        let app = App::new(test_compendium(), path).unwrap();
+        let character = Character {
+            class: "Fighter".into(),
+            senses: "Vision dans le noir 18 m".into(),
+            defences: "Résistance au feu".into(),
+            proficiencies_and_training: "Outils de forgeron".into(),
+            ..Character::default()
+        };
+        let rendered = app
+            .sheet_lines(&character)
+            .iter()
+            .map(|line| {
+                line.spans
+                    .iter()
+                    .map(|span| span.content.to_string())
+                    .collect::<String>()
+            })
+            .collect::<Vec<_>>()
+            .join("\n");
+        assert!(rendered.contains("Vision dans le noir 18 m"));
+        assert!(rendered.contains("Résistance au feu"));
+        assert!(rendered.contains("Outils de forgeron"));
     }
 
     #[test]
