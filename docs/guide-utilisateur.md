@@ -2,8 +2,9 @@
 
 D&D Tracker est une application interactive en terminal (TUI) écrite en Rust pour
 créer et suivre des personnages de D&D 5e, avec un compendium Fight Club comme
-source de données. Les libellés de l'interface sont en français; certains noms
-et textes de capacités peuvent rester dans la langue du compendium importé.
+source de données. L'interface est disponible en français et en anglais; des
+catalogues peuvent ajouter d'autres langues. Certains noms et textes de
+capacités peuvent rester dans la langue du compendium importé.
 
 Ce guide décrit les fonctions disponibles dans l'application actuelle. Le
 gestionnaire suit les informations de personnage et plusieurs ressources de jeu,
@@ -13,6 +14,7 @@ mais ne remplace pas un moteur complet de règles ou un outil de table virtuelle
 
 - [Prérequis](#prérequis)
 - [Installer et lancer](#installer-et-lancer)
+- [Langue de l'interface](#langue-de-linterface)
 - [Importer un compendium](#importer-un-compendium)
 - [Comprendre l'interface](#comprendre-linterface)
 - [Créer un personnage](#créer-un-personnage)
@@ -53,6 +55,41 @@ commande :
 ```sh
 cargo run -- --help
 ```
+
+## Langue de l'interface
+
+La langue active et le raccourci `F2` apparaissent dans l'aide en bas de
+l'écran. Appuie sur `F2` pour basculer immédiatement entre français et anglais,
+y compris pendant une saisie ou un sélecteur. Le choix par défaut au lancement
+est le français. Pour démarrer directement en anglais, définis `DND_LANGUAGE` :
+
+```sh
+DND_LANGUAGE=en cargo run
+```
+
+Sous PowerShell :
+
+```powershell
+$env:DND_LANGUAGE = "en"
+cargo run
+```
+
+Les codes de langue sont normalisés en minuscules avec des tirets, comme `fr`,
+`en` ou `es-mx`. Si le catalogue régional `es-mx` n'existe pas, l'application
+essaie le catalogue de base `es`. Pour installer une langue supplémentaire,
+ajoute un fichier JSON nommé d'après ce code dans `locales/` sous le dossier de
+données de l'application :
+
+- Linux/macOS : `$XDG_DATA_HOME/dnd-tracker/locales/`, ou
+  `~/.local/share/dnd-tracker/locales/` si `XDG_DATA_HOME` n'est pas défini.
+- Windows : `%APPDATA%\dnd-tracker\locales\`.
+
+Le fichier doit déclarer `language`, `name` et `translations`. Chaque entrée de
+`translations` associe une phrase française de l'interface à sa traduction; les
+fragments absents restent en français. Le catalogue anglais intégré
+`locales/en.json` sert d'exemple. Les textes et noms provenant du compendium ne
+sont pas traduits automatiquement. Pour le format et les exemples complets,
+consulte le [guide de localisation](localisation.md).
 
 ## Importer un compendium
 
@@ -331,6 +368,7 @@ Le code est organisé autour de ces modules :
 - `src/compendium_store.rs` : cache SQLite, métadonnées de source et mises à
   jour transactionnelles.
 - `src/storage.rs` : chemins des données utilisateur et sauvegardes JSON.
+- `src/localization.rs` : sélection et chargement des catalogues de langue.
 
 Les modifications de fiche sont enregistrées automatiquement. Les sources XML
 ne sont pas incluses dans le dépôt : le compendium externe est importé dans le
@@ -347,6 +385,8 @@ cargo test
 cargo clippy --all-targets --all-features -- -D warnings
 cargo doc --no-deps
 ```
+
+La CI exécute le formatage, les tests et Clippy sur Linux, Windows et macOS.
 
 ## Licence et données externes
 

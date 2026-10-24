@@ -4,6 +4,7 @@ mod app;
 mod character;
 mod compendium;
 mod compendium_store;
+mod localization;
 mod storage;
 
 use app::App;
@@ -64,7 +65,8 @@ fn resolve_xml_argument() -> Result<Option<Option<PathBuf>>, Box<dyn Error>> {
             "Usage: dnd-tracker [--import] [CHEMIN_DU_COMPENDIUM.xml]\n\
              Sans argument, le compendium actif est chargé depuis SQLite.\n\
              --import ou un chemin importe/remplace le compendium actif.\n\
-             DND_COMPENDIUM peut aussi sélectionner un fichier XML."
+             DND_COMPENDIUM peut aussi sélectionner un fichier XML.\n\
+             DND_LANGUAGE choisit la langue de l'interface (fr par défaut, en intégré)."
         );
         return Ok(None);
     }

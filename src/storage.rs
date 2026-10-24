@@ -3,6 +3,7 @@
 use crate::character::Character;
 use std::error::Error;
 use std::fs;
+use std::io;
 use std::path::{Path, PathBuf};
 
 /// Choisit le dossier de données utilisateur selon les conventions de la plateforme.
@@ -16,7 +17,7 @@ pub fn compendium_file() -> Result<PathBuf, Box<dyn Error>> {
 }
 
 /// Choisit le dossier de données selon XDG, APPDATA ou le dossier personnel de la plateforme.
-fn data_directory() -> Result<PathBuf, Box<dyn Error>> {
+pub fn data_directory() -> Result<PathBuf, Box<dyn Error>> {
     let data_dir = if let Some(data_home) = std::env::var_os("XDG_DATA_HOME") {
         PathBuf::from(data_home)
     } else if let Some(app_data) = std::env::var_os("APPDATA") {
@@ -54,8 +55,47 @@ pub fn save(path: &Path, characters: &[Character]) -> Result<(), Box<dyn Error>>
     let temporary_path = path.with_extension("json.tmp");
     let contents = serde_json::to_string_pretty(characters)?;
     fs::write(&temporary_path, contents)?;
-    fs::rename(temporary_path, path)?;
+    replace_file(&temporary_path, path)?;
     Ok(())
+}
+
+/// Remplace la sauvegarde sans supprimer l'ancienne si l'opération échoue.
+#[cfg(not(windows))]
+fn replace_file(temporary_path: &Path, destination: &Path) -> io::Result<()> {
+    fs::rename(temporary_path, destination)
+}
+
+/// Utilise le remplacement natif de Windows pour écraser le fichier existant.
+#[cfg(windows)]
+fn replace_file(temporary_path: &Path, destination: &Path) -> io::Result<()> {
+    use std::os::windows::ffi::OsStrExt;
+    use windows_sys::Win32::Storage::FileSystem::{
+        MoveFileExW, MOVEFILE_REPLACE_EXISTING, MOVEFILE_WRITE_THROUGH,
+    };
+
+    let source: Vec<u16> = temporary_path
+        .as_os_str()
+        .encode_wide()
+        .chain(std::iter::once(0))
+        .collect();
+    let target: Vec<u16> = destination
+        .as_os_str()
+        .encode_wide()
+        .chain(std::iter::once(0))
+        .collect();
+    // Les deux pointeurs sont des chemins UTF-16 terminés par zéro et restent valides pendant l'appel.
+    let result = unsafe {
+        MoveFileExW(
+            source.as_ptr(),
+            target.as_ptr(),
+            MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH,
+        )
+    };
+    if result == 0 {
+        Err(io::Error::last_os_error())
+    } else {
+        Ok(())
+    }
 }
 
 #[cfg(test)]
@@ -75,10 +115,18 @@ mod tests {
         };
 
         save(&path, &[character]).unwrap();
+        save(
+            &path,
+            &[Character {
+                name: "Updated".into(),
+                ..Character::default()
+            }],
+        )
+        .unwrap();
         let loaded = load(&path).unwrap();
 
         assert_eq!(loaded.len(), 1);
-        assert_eq!(loaded[0].name, "Test");
+        assert_eq!(loaded[0].name, "Updated");
         std::fs::remove_dir_all(directory).unwrap();
     }
 }

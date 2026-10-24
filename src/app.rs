@@ -3,6 +3,7 @@
 use crate::character::ExtraCreature;
 use crate::character::{AbilityIncrease, Character, InventorySlot, LevelAdvancement, Resource};
 use crate::compendium::{Background, Class, Compendium, Feat, Item, Spell};
+use crate::localization::Localization;
 use crate::storage;
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use rand::Rng;
@@ -217,6 +218,8 @@ pub struct App {
     status: String,
     /// Emplacement du fichier JSON de personnages.
     storage_path: PathBuf,
+    /// Catalogue de langue sélectionné pour l'interface.
+    localization: Localization,
 }
 
 impl App {
@@ -226,6 +229,7 @@ impl App {
         storage_path: PathBuf,
     ) -> Result<Self, Box<dyn std::error::Error>> {
         let characters = storage::load(&storage_path)?;
+        let localization = Localization::from_environment()?;
         Ok(Self {
             compendium,
             characters,
@@ -245,6 +249,7 @@ impl App {
             picker_index: 0,
             status: String::from("Prêt. Appuyez sur n pour créer un personnage."),
             storage_path,
+            localization,
         })
     }
 
@@ -265,6 +270,10 @@ impl App {
 
     /// Achemine une touche selon le mode courant de l'interface.
     pub fn handle_key(&mut self, key: KeyEvent) {
+        if key.code == KeyCode::F(2) {
+            self.toggle_language();
+            return;
+        }
         if key.code == KeyCode::Esc {
             self.mode = Mode::Normal;
             self.wizard = None;
@@ -278,6 +287,23 @@ impl App {
             Mode::Input(kind) => self.handle_input_key(key, kind),
             Mode::Picker(kind) => self.handle_picker_key(key, kind),
             Mode::ConfirmDelete => self.handle_delete_key(key),
+        }
+    }
+
+    /// Bascule entre les catalogues français et anglais intégrés.
+    fn toggle_language(&mut self) {
+        let language = if self.localization.language() == "en" {
+            "fr"
+        } else {
+            "en"
+        };
+        match Localization::from_language(language) {
+            Ok(localization) => {
+                let name = localization.name().to_owned();
+                self.localization = localization;
+                self.status = format!("Langue modifiée : {name}");
+            }
+            Err(error) => self.status = format!("Erreur de langue : {error}"),
         }
     }
 
@@ -2316,7 +2342,11 @@ impl App {
     /// Dessine le cadre, la fiche et le dialogue correspondant au mode actif.
     pub fn render(&self, frame: &mut Frame) {
         let area = frame.area();
-        let hints = self.footer_hints();
+        let mut hints = self.footer_hints();
+        hints.push(footer_line(&[footer_action(
+            "F2",
+            &format!("Langue : {}", self.localization.name()),
+        )]));
         let footer_height = hints.len() as u16 + 3;
         let layout = Layout::default()
             .direction(Direction::Vertical)
@@ -2327,7 +2357,13 @@ impl App {
             ])
             .split(area);
 
-        let title = Paragraph::new("D&D PERSONNAGES  |  Compendium 5e 2024")
+        let title_text = format!(
+            "{} ({})",
+            self.localization
+                .translate("D&D PERSONNAGES  |  Compendium 5e 2024"),
+            self.localization.name()
+        );
+        let title = Paragraph::new(title_text)
             .alignment(Alignment::Center)
             .style(
                 Style::default()
@@ -2345,13 +2381,21 @@ impl App {
         self.render_detail(frame, body[1]);
 
         let mut footer_lines = vec![Line::from(Span::styled(
-            self.status.as_str(),
+            self.localization.translate(&self.status),
             Style::default().fg(Color::Gray),
         ))];
-        footer_lines.extend(hints);
+        footer_lines.extend(
+            hints
+                .into_iter()
+                .map(|line| localize_line(line, &self.localization)),
+        );
         let footer = Paragraph::new(Text::from(footer_lines))
             .wrap(Wrap { trim: true })
-            .block(Block::default().borders(Borders::ALL).title("État"));
+            .block(
+                Block::default()
+                    .borders(Borders::ALL)
+                    .title(self.localization.translate("État")),
+            );
         frame.render_widget(footer, layout[2]);
 
         match self.mode {
@@ -2454,7 +2498,7 @@ impl App {
                         footer_action("X", "Retirer don"),
                     ]),
                     Tab::Journal => hints.extend([
-                        footer_action("O", "Histoire"),
+                        footer_action("O", "Histoire personnelle"),
                         footer_action("N", "Notes"),
                         footer_action("D", "Défenses"),
                         footer_action("S", "Sens"),
@@ -2478,20 +2522,27 @@ impl App {
     /// Affiche la liste des personnages avec la sélection courante.
     fn render_character_list(&self, frame: &mut Frame, area: Rect) {
         let items: Vec<ListItem> = if self.characters.is_empty() {
-            vec![ListItem::new("Aucun personnage\nAppuyez sur n")]
+            vec![ListItem::new(
+                self.localization
+                    .translate("Aucun personnage\nAppuyez sur n"),
+            )]
         } else {
             self.characters
                 .iter()
                 .map(|character| {
-                    ListItem::new(format!(
+                    ListItem::new(self.localization.translate(&format!(
                         "{}\n{} niv. {}",
                         character.name, character.class, character.level
-                    ))
+                    )))
                 })
                 .collect()
         };
         let list = List::new(items)
-            .block(Block::default().borders(Borders::ALL).title("Personnages"))
+            .block(
+                Block::default()
+                    .borders(Borders::ALL)
+                    .title(self.localization.translate("Personnages")),
+            )
             .highlight_style(
                 Style::default()
                     .bg(Color::Blue)
@@ -2509,30 +2560,35 @@ impl App {
     /// Dessine le panneau de détail et ses onglets.
     fn render_detail(&self, frame: &mut Frame, area: Rect) {
         let Some(character) = self.selected_character() else {
-            let text = Text::from(vec![
-                Line::from("Bienvenue dans votre gestionnaire de personnages."),
-                Line::from(
-                    "Créez une fiche avec n. Les données sont sauvegardées automatiquement.",
-                ),
-                Line::from(""),
-                Line::from(format!("Personnages : {}", self.characters.len())),
-                Line::from(format!(
-                    "Classes dans le compendium : {}",
-                    self.compendium.classes.len()
-                )),
-                Line::from(format!(
-                    "Espèces : {}  |  Historiques : {}  |  Sorts : {}  |  Objets : {}",
-                    self.compendium.races.len(),
-                    self.compendium.backgrounds.len(),
-                    self.compendium.spells.len(),
-                    self.compendium.items.len()
-                )),
-            ]);
+            let text = Text::from(
+                vec![
+                    Line::from("Bienvenue dans votre gestionnaire de personnages."),
+                    Line::from(
+                        "Créez une fiche avec n. Les données sont sauvegardées automatiquement.",
+                    ),
+                    Line::from(""),
+                    Line::from(format!("Personnages : {}", self.characters.len())),
+                    Line::from(format!(
+                        "Classes dans le compendium : {}",
+                        self.compendium.classes.len()
+                    )),
+                    Line::from(format!(
+                        "Espèces : {}  |  Historiques : {}  |  Sorts : {}  |  Objets : {}",
+                        self.compendium.races.len(),
+                        self.compendium.backgrounds.len(),
+                        self.compendium.spells.len(),
+                        self.compendium.items.len()
+                    )),
+                ]
+                .into_iter()
+                .map(|line| localize_line(line, &self.localization))
+                .collect::<Vec<_>>(),
+            );
             frame.render_widget(
                 Paragraph::new(text).wrap(Wrap { trim: false }).block(
                     Block::default()
                         .borders(Borders::ALL)
-                        .title("Tableau de bord"),
+                        .title(self.localization.translate("Tableau de bord")),
                 ),
                 area,
             );
@@ -2551,15 +2607,25 @@ impl App {
                 self.journal_lines(character),
             ),
         };
-        let tabs = Line::from(vec![
-            Span::styled(" Fiche ", tab_style(self.tab == Tab::Sheet)),
-            Span::styled(" Inventaire ", tab_style(self.tab == Tab::Equipment)),
-            Span::styled(" Sorts ", tab_style(self.tab == Tab::Spells)),
-            Span::styled(" Progression ", tab_style(self.tab == Tab::Progression)),
-            Span::styled(" Journal ", tab_style(self.tab == Tab::Journal)),
-        ]);
-        let text = Text::from(lines);
-        let block = Block::default().borders(Borders::ALL).title(title);
+        let tabs = localize_line(
+            Line::from(vec![
+                Span::styled(" Fiche ", tab_style(self.tab == Tab::Sheet)),
+                Span::styled(" Inventaire ", tab_style(self.tab == Tab::Equipment)),
+                Span::styled(" Sorts ", tab_style(self.tab == Tab::Spells)),
+                Span::styled(" Progression ", tab_style(self.tab == Tab::Progression)),
+                Span::styled(" Journal ", tab_style(self.tab == Tab::Journal)),
+            ]),
+            &self.localization,
+        );
+        let text = Text::from(
+            lines
+                .into_iter()
+                .map(|line| localize_line(line, &self.localization))
+                .collect::<Vec<_>>(),
+        );
+        let block = Block::default()
+            .borders(Borders::ALL)
+            .title(self.localization.translate(title));
         let inner = block.inner(area);
         frame.render_widget(block, area);
         let chunks = Layout::default()
@@ -3116,7 +3182,7 @@ impl App {
 
     /// Dessine une fenêtre de saisie avec l'aide adaptée au champ actif.
     fn render_input(&self, frame: &mut Frame, kind: InputKind, area: Rect) {
-        let prompt = match kind {
+        let prompt = self.localization.translate(match kind {
             InputKind::CharacterName => "Nom du personnage",
             InputKind::Score(index) => match index {
                 0 => "Caractéristique FOR",
@@ -3154,8 +3220,8 @@ impl App {
                 "Créature ou compagnon (nom | détails)"
             }
             InputKind::SkillChoices => "Maîtrises de compétences (séparées par des virgules)",
-        };
-        let help = match kind {
+        });
+        let help = self.localization.translate(&match kind {
             InputKind::SkillChoices => self
                 .wizard
                 .as_ref()
@@ -3227,7 +3293,7 @@ impl App {
             }
             InputKind::Speed => "\nEx. marche 9 m, nage 9 m. Vide pour revenir à la valeur de l'espèce.".into(),
             _ => String::new(),
-        };
+        });
         let popup = centered_rect(
             88,
             if matches!(kind, InputKind::Backstory | InputKind::AdventureNotes) {
@@ -3246,12 +3312,18 @@ impl App {
             &self.input[self.input_cursor..]
         );
         let content = format!(
-            "{prompt}{help}\n\n> {input_display}\n\nEntrée : enregistrer  |  Échap : annuler",
+            "{prompt}{help}\n\n> {input_display}\n\n{}",
+            self.localization
+                .translate("Entrée : enregistrer  |  Échap : annuler"),
         );
         let cursor_line = self.input[..self.input_cursor].matches('\n').count();
         frame.render_widget(
             Paragraph::new(content)
-                .block(Block::default().borders(Borders::ALL).title("Saisie"))
+                .block(
+                    Block::default()
+                        .borders(Borders::ALL)
+                        .title(self.localization.translate("Saisie")),
+                )
                 .wrap(Wrap { trim: false })
                 .scroll((cursor_line.saturating_sub(6) as u16, 0)),
             popup,
@@ -3275,7 +3347,9 @@ impl App {
         };
         let popup = centered_rect(78, 80, area);
         frame.render_widget(Clear, popup);
-        let block = Block::default().borders(Borders::ALL).title(title);
+        let block = Block::default()
+            .borders(Borders::ALL)
+            .title(self.localization.translate(title));
         let inner = block.inner(popup);
         frame.render_widget(block, popup);
         let inner_chunks = Layout::default()
@@ -3287,8 +3361,12 @@ impl App {
             ])
             .split(inner);
         frame.render_widget(
-            Paragraph::new(format!("Recherche : {}", self.picker_query))
-                .block(Block::default().borders(Borders::ALL)),
+            Paragraph::new(format!(
+                "{}{}",
+                self.localization.translate("Recherche : "),
+                self.picker_query
+            ))
+            .block(Block::default().borders(Borders::ALL)),
             inner_chunks[0],
         );
         let options = self.picker_options(kind);
@@ -3346,7 +3424,10 @@ impl App {
                 } else {
                     String::new()
                 };
-                ListItem::new(format!("{marker}{option}{description}"))
+                ListItem::new(format!(
+                    "{marker}{option}{}",
+                    self.localization.translate(&description)
+                ))
             })
             .collect();
         let relative_index = selected_index - start;
@@ -3354,26 +3435,32 @@ impl App {
         if !visible.is_empty() {
             state.select(Some(relative_index.min(visible.len() - 1)));
         }
+        let result_word = if options.len() == 1 {
+            "résultat"
+        } else {
+            "résultats"
+        };
         frame.render_stateful_widget(
             List::new(visible)
                 .highlight_style(Style::default().bg(Color::Blue).fg(Color::White))
                 .highlight_symbol("› ")
                 .block(
-                    Block::default()
-                        .borders(Borders::ALL)
-                        .title(format!("{} résultat(s)", options.len())),
+                    Block::default().borders(Borders::ALL).title(
+                        self.localization
+                            .translate(&format!("{} {result_word}", options.len())),
+                    ),
                 ),
             inner_chunks[1],
             &mut state,
         );
         frame.render_widget(
-            Paragraph::new(if self.wizard.is_some()
+            Paragraph::new(self.localization.translate(if self.wizard.is_some()
                 && matches!(kind, PickKind::StartingItem | PickKind::Spell)
             {
                 "↑/↓ choisir | taper pour filtrer | Espace sélectionner | Entrée continuer | Échap annuler"
             } else {
                 "↑/↓ choisir | taper pour filtrer | Entrée valider | Échap annuler"
-            }),
+            })),
             inner_chunks[2],
         );
     }
@@ -3396,12 +3483,28 @@ impl App {
             .map(|character| character.name.as_str())
             .unwrap_or("");
         frame.render_widget(
-            Paragraph::new(format!("Supprimer « {name} » ?\n\ny confirmer | n annuler"))
-                .alignment(Alignment::Center)
-                .block(Block::default().borders(Borders::ALL).title("Confirmation")),
+            Paragraph::new(self.localization.translate(&format!(
+                "Supprimer « {name} » ?\n\ny confirmer | n annuler"
+            )))
+            .alignment(Alignment::Center)
+            .block(
+                Block::default()
+                    .borders(Borders::ALL)
+                    .title(self.localization.translate("Confirmation")),
+            ),
             popup,
         );
     }
+}
+
+/// Traduit chaque fragment d'une ligne en préservant son style terminal.
+fn localize_line(line: Line<'static>, localization: &Localization) -> Line<'static> {
+    Line::from(
+        line.spans
+            .into_iter()
+            .map(|span| Span::styled(localization.translate(&span.content), span.style))
+            .collect::<Vec<_>>(),
+    )
 }
 
 /// Calcule les PV maximums selon la moyenne fixe du dé de vie à chaque niveau.
@@ -4157,6 +4260,33 @@ mod tests {
         assert!(journal.contains("(O) Histoire"));
         assert!(journal.contains("(N)otes"));
         assert!(journal.contains("(M)odifier créature"));
+    }
+
+    #[test]
+    fn f2_switches_between_french_and_english_from_any_screen() {
+        let path = std::env::temp_dir().join(format!(
+            "dnd-tracker-language-test-{}.json",
+            std::process::id()
+        ));
+        let mut app = App::new(test_compendium(), path).unwrap();
+        let starting_language = app.localization.language().to_owned();
+        let expected_language = if starting_language == "en" {
+            "fr"
+        } else {
+            "en"
+        };
+        app.mode = super::Mode::Input(InputKind::CharacterName);
+
+        app.handle_key(crossterm::event::KeyEvent::new(
+            crossterm::event::KeyCode::F(2),
+            crossterm::event::KeyModifiers::NONE,
+        ));
+
+        assert_eq!(app.localization.language(), expected_language);
+        assert!(matches!(
+            app.mode,
+            super::Mode::Input(InputKind::CharacterName)
+        ));
     }
 
     #[test]

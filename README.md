@@ -2,9 +2,16 @@
 
 Gestionnaire de personnages D&D 5e en Rust avec interface terminal (TUI). Le compendium XML est généré à partir de [FightClub5eXML](https://github.com/vidalvanbergen/FightClub5eXML); il n'est pas inclus dans ce dépôt. Après l'import initial, les données du compendium sont mises en cache dans une base SQLite locale pour accélérer les lancements suivants.
 
+L'interface est disponible en français et en anglais; appuyez sur `F2` pour
+basculer entre les deux langues. Les catalogues utilisateur permettent d'ajouter
+d'autres langues sans recompiler l'application. Le projet est vérifié en CI sous
+Linux, Windows et macOS.
+
 Consultez le [guide utilisateur complet](docs/guide-utilisateur.md) pour les
 prérequis, l'installation, l'import du compendium, les sections de la fiche,
 tous les raccourcis clavier, les sauvegardes et les limites connues.
+Voir aussi le [guide de localisation](docs/localisation.md) pour changer ou
+ajouter une langue.
 
 ## Fonctionnalités
 
@@ -22,10 +29,11 @@ tous les raccourcis clavier, les sauvegardes et les limites connues.
 - Suivi de l'XP avec calcul automatique du niveau selon les seuils 5e 2024, avec modification manuelle du niveau.
 - Conditions actives et journal des actions de combat (sorts lancés, emplacements et ressources dépensés, dégâts/soins, repos et notes manuelles).
 - Journal de personnage avec histoire personnelle modifiable sur plusieurs lignes, notes d'aventure, défenses, sens, vitesse personnalisée, maîtrises supplémentaires et créatures/compagnons.
+- Interface française ou anglaise, avec des catalogues JSON ajoutables par l'utilisateur.
 
 ## Prérequis
 
-- Rust et Cargo (canal stable).
+- Rust et Cargo (canal stable) sous Linux, Windows ou macOS.
 - Un compendium XML compilé depuis le dépôt [FightClub5eXML](https://github.com/vidalvanbergen/FightClub5eXML).
 - `xsltproc` pour compiler le compendium sous Linux/macOS. Le dépôt source fournit `build-collections.ps1` pour Windows.
 
