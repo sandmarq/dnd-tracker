@@ -21,6 +21,7 @@ use std::io::{self, stdout};
 use std::path::PathBuf;
 use std::time::Duration;
 
+/// Initialise le compendium, prépare le terminal et exécute l'application TUI.
 fn main() -> Result<(), Box<dyn Error>> {
     let Some(xml_path) = resolve_xml_argument()? else {
         return Ok(());
@@ -52,6 +53,7 @@ fn main() -> Result<(), Box<dyn Error>> {
     Ok(())
 }
 
+/// Résout l'option d'import, le chemin XML éventuel et le mode aide.
 fn resolve_xml_argument() -> Result<Option<Option<PathBuf>>, Box<dyn Error>> {
     let mut arguments = std::env::args_os().skip(1);
     let first_argument = arguments.next();
@@ -99,6 +101,7 @@ fn resolve_xml_argument() -> Result<Option<Option<PathBuf>>, Box<dyn Error>> {
     Ok(Some(None))
 }
 
+/// Recherche un compendium XML aux emplacements conventionnels du projet et du binaire.
 fn default_xml_path() -> Result<Option<PathBuf>, Box<dyn Error>> {
     let file_name = "WotC_5.5e_only.xml";
     let current_dir = std::env::current_dir()?;
@@ -126,6 +129,7 @@ fn default_xml_path() -> Result<Option<PathBuf>, Box<dyn Error>> {
         .cloned())
 }
 
+/// Charge le cache actif, l'actualise si sa source a changé ou effectue le premier import.
 fn load_active_compendium(
     database_path: &std::path::Path,
 ) -> Result<(Compendium, String), Box<dyn Error>> {
@@ -151,6 +155,7 @@ fn load_active_compendium(
     import_or_load(&xml_path, database_path)
 }
 
+/// Importe le XML uniquement si son empreinte diffère de celle déjà mise en cache.
 fn import_or_load(
     xml_path: &std::path::Path,
     database_path: &std::path::Path,
@@ -183,16 +188,18 @@ fn import_or_load(
     compendium_store::replace(database_path, xml_path, &source_hash, &compendium)
         .map_err(|error| format!("Échec de remplacement du cache SQLite : {error}"))?;
     let message = format!(
-        "Compendium importé dans SQLite : {} objets, {} sorts, {} classes, {} espèces et {} dons.",
+        "Compendium importé dans SQLite : {} objets, {} sorts, {} classes, {} espèces, {} backgrounds et {} dons.",
         compendium.items.len(),
         compendium.spells.len(),
         compendium.classes.len(),
         compendium.races.len(),
+        compendium.backgrounds.len(),
         compendium.feats.len()
     );
     Ok((compendium, message))
 }
 
+/// Produit le message utilisateur décrivant l'origine du compendium chargé.
 fn cache_message(metadata: &Metadata) -> String {
     format!(
         "Compendium chargé depuis le cache SQLite (source : {}). Utilisez --import pour le remplacer.",
@@ -200,6 +207,7 @@ fn cache_message(metadata: &Metadata) -> String {
     )
 }
 
+/// Dessine l'interface et distribue les événements clavier jusqu'à la fermeture.
 fn run_app(
     terminal: &mut Terminal<CrosstermBackend<io::Stdout>>,
     app: &mut App,
@@ -215,6 +223,7 @@ fn run_app(
     Ok(())
 }
 
+/// Quitte le mode terminal alternatif et restaure l'entrée terminal standard.
 fn restore_terminal(
     terminal: &mut Terminal<CrosstermBackend<io::Stdout>>,
 ) -> Result<(), Box<dyn Error>> {

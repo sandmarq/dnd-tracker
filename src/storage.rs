@@ -10,10 +10,12 @@ pub fn character_file() -> Result<PathBuf, Box<dyn Error>> {
     Ok(data_directory()?.join("characters.json"))
 }
 
+/// Retourne le chemin de la base SQLite du compendium dans le dossier de données utilisateur.
 pub fn compendium_file() -> Result<PathBuf, Box<dyn Error>> {
     Ok(data_directory()?.join("compendium.sqlite3"))
 }
 
+/// Choisit le dossier de données selon XDG, APPDATA ou le dossier personnel de la plateforme.
 fn data_directory() -> Result<PathBuf, Box<dyn Error>> {
     let data_dir = if let Some(data_home) = std::env::var_os("XDG_DATA_HOME") {
         PathBuf::from(data_home)
@@ -41,6 +43,7 @@ pub fn load(path: &Path) -> Result<Vec<Character>, Box<dyn Error>> {
     Ok(serde_json::from_str(&contents)?)
 }
 
+/// Sauvegarde les personnages en JSON en remplaçant atomiquement le fichier précédent.
 pub fn save(path: &Path, characters: &[Character]) -> Result<(), Box<dyn Error>> {
     let parent = path
         .parent()
@@ -61,6 +64,7 @@ mod tests {
     use crate::character::Character;
 
     #[test]
+    /// Vérifie que les fiches enregistrées sont relues sans perte de données.
     fn saves_and_loads_character_data() {
         let directory =
             std::env::temp_dir().join(format!("dnd-tracker-test-{}", std::process::id()));

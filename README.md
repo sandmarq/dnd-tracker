@@ -5,12 +5,16 @@ Gestionnaire de personnages D&D 5e en Rust avec interface terminal (TUI). Le com
 ## Fonctionnalités
 
 - Plusieurs personnages avec sauvegarde JSON automatique.
-- Création guidée depuis les espèces, classes et compétences présentes dans le compendium.
+- Création guidée depuis les espèces, classes, backgrounds et compétences du compendium.
+- Application des maîtrises, du don et des bonus de caractéristiques du background.
+- Choix des paquets d'équipement de départ A/B, objets complémentaires et sorts de classe.
 - Fiche avec caractéristiques, modificateurs, compétences, sauvegardes, maîtrise, PV, CA et statistiques d'incantation.
 - Progression de classe, dons et sous-classe.
 - Inventaire lié aux objets XML, équipement et calcul de CA.
 - Liste de sorts et suivi des emplacements.
 - Suivi de PV, PV temporaires, dés de vie et ressources; repos court et long.
+- Suivi de l'XP avec calcul automatique du niveau selon les seuils 5e 2024, avec modification manuelle du niveau.
+- Conditions actives et journal des actions de combat (sorts lancés, emplacements et ressources dépensés, dégâts/soins, repos et notes manuelles).
 
 ## Prérequis
 
@@ -66,19 +70,25 @@ Sur Windows, passe le chemin au programme avec `cargo run -- --import C:\chemin\
 
 Les fiches sont sauvegardées dans `$XDG_DATA_HOME/dnd-tracker/characters.json`, ou dans `~/.local/share/dnd-tracker/characters.json` si `XDG_DATA_HOME` n'est pas défini. Sous Windows, l'application utilise `%APPDATA%\dnd-tracker\characters.json`.
 
+Le compendium SQLite existant est actualisé depuis son XML source pour inclure les backgrounds. Si ce fichier source n'est plus disponible, réimporte-le avec `--import`.
+
 ## Commandes
 
-- `n` : créer une fiche; saisir le nom, choisir l'espèce et la classe, entrer les caractéristiques et choisir les compétences permises par la classe.
+- `n` : créer une fiche; saisir le nom, choisir l'espèce, la classe et le background, répartir les caractéristiques et compétences, puis choisir l'équipement et les sorts de départ. Les maîtrises et le don du background sont ajoutés automatiquement; les paquets A/B sont proposés quand le compendium les décrit.
+- Dans les sélecteurs d'équipement et de sorts de création : `Espace` sélectionne/désélectionne une option et `Entrée` passe à l'étape suivante.
 - `Tab` : passer entre fiche, équipement, sorts et progression.
 - `↑` / `↓` : changer de personnage; dans les vues d'équipement, sorts et progression, déplacer la sélection.
 - `1` à `6` dans la fiche : modifier FOR, DEX, CON, INT, SAG ou CHA.
 - `i` : ajouter un objet; `Espace` équipe/déséquipe; `x` retire l'objet sélectionné.
 - `p` : ajouter un sort de la classe; dans la vue des sorts, `1` à `9` choisit le niveau d'emplacement, `]` dépense un emplacement et `[` le restaure.
 - `f` : ajouter un don; `x` retire le don sélectionné dans la vue de progression.
-- `+` : gagner un niveau; `b` : saisir ou modifier une sous-classe.
+- `e` : définir l'XP totale; le niveau suit le seuil 5e 2024 correspondant. `l` : définir le niveau directement (sans modifier l'XP); `+` : gagner un niveau; `b` : saisir ou modifier une sous-classe.
 - `h` : saisir des dégâts (nombre négatif) ou des soins (nombre positif); les dégâts épuisent d'abord les PV temporaires.
 - `t` : définir les PV temporaires; `g` : lancer un dé de vie; `u` : dépenser la ressource sélectionnée.
-- `[` / `]` dans la fiche : choisir une ressource; `v` : repos court; `r` : repos long.
+- `C` : ajouter une condition (ex. `stunned`, `fear` ou `Effrayé`); `x` dans la fiche retire la dernière condition. Les conditions ne sont pas effacées automatiquement lors d'un repos.
+- `c` : lancer un sort de la liste; un sort avec emplacement disponible le dépense automatiquement. Les sorts mineurs n'en dépensent pas.
+- `a` : noter manuellement une attaque, une action ou un événement; le journal de la fiche conserve les 100 dernières entrées.
+- `[` / `]` dans la fiche : choisir une ressource; `v` : repos court; `r` ou `R` : repos long. Un repos court restaure les ressources marquées récupérables à court repos et les emplacements du Warlock; un repos long restaure les emplacements et ressources.
 - `PgUp` / `PgDn` : faire défiler le panneau de détails; `Esc` annule une saisie; `q` quitte.
 
 ## Développement
@@ -97,4 +107,4 @@ Les fichiers de données sont obtenus séparément depuis [FightClub5eXML](https
 
 ## État du projet
 
-Cette première version fournit les flux de gestion courants mais n'offre pas encore une parité complète avec Fight Club 5. Les choix de sous-classe et de dons restent manuels; les historiques, le multiclassage, les choix d'espèce, la préparation des sorts et les règles détaillées de combat sont à développer.
+Cette première version fournit les flux de gestion courants mais n'offre pas encore une parité complète avec Fight Club 5. Les durées des conditions et les tours ne sont pas chronométrés; l'application ne calcule pas automatiquement les effets de sort, les jets d'attaque, l'initiative, la concentration ou les règles détaillées de combat. Les actions non gérées sont notées manuellement avec `a`.

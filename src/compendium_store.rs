@@ -11,14 +11,18 @@ use std::io::{BufReader, Read};
 use std::path::{Path, PathBuf};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
-const SCHEMA_VERSION: i64 = 1;
+const SCHEMA_VERSION: i64 = 2;
 
 #[derive(Debug)]
+/// Métadonnées d'origine du compendium stocké dans le cache local.
 pub struct Metadata {
+    /// Chemin absolu du XML importé, utilisé pour contrôler les mises à jour.
     pub source_path: String,
+    /// Empreinte SHA-256 du XML au moment de son import.
     pub sha256: String,
 }
 
+/// Calcule l'empreinte SHA-256 d'un fichier sans le charger entièrement en mémoire.
 pub fn fingerprint(path: &Path) -> Result<String, Box<dyn Error>> {
     let file = File::open(path)?;
     let mut reader = BufReader::new(file);
@@ -34,12 +38,29 @@ pub fn fingerprint(path: &Path) -> Result<String, Box<dyn Error>> {
     Ok(format!("{:x}", hasher.finalize()))
 }
 
+/// Charge le compendium et ses métadonnées; migre les caches v1 depuis leur XML d'origine.
 pub fn load(database_path: &Path) -> Result<Option<(Compendium, Metadata)>, Box<dyn Error>> {
     if !database_path.is_file() {
         return Ok(None);
     }
     let connection = open(database_path)?;
     let schema_version: i64 = connection.query_row("PRAGMA user_version", [], |row| row.get(0))?;
+    if schema_version == 1 {
+        let metadata = read_metadata(&connection)?;
+        drop(connection);
+        let source = PathBuf::from(&metadata.source_path);
+        if !source.is_file() {
+            return Err(format!(
+                "Le cache doit être actualisé pour les backgrounds, mais la source XML est introuvable : {}. Réimportez un compendium avec --import.",
+                source.display()
+            )
+            .into());
+        }
+        let compendium = Compendium::load_from_file(&source)?;
+        let source_hash = fingerprint(&source)?;
+        replace(database_path, &source, &source_hash, &compendium)?;
+        return load(database_path);
+    }
     if schema_version != SCHEMA_VERSION {
         return Err(format!(
             "Version du cache SQLite non prise en charge ({schema_version}); réimportez un compendium avec --import."
@@ -53,18 +74,20 @@ pub fn load(database_path: &Path) -> Result<Option<(Compendium, Metadata)>, Box<
         spells: load_category(&connection, "spells")?,
         classes: load_category(&connection, "classes")?,
         races: load_category(&connection, "races")?,
+        backgrounds: load_category(&connection, "backgrounds")?,
         feats: load_category(&connection, "feats")?,
     };
     Ok(Some((compendium, metadata)))
 }
 
+/// Lit l'empreinte source enregistrée, y compris dans les caches nécessitant une migration.
 pub fn source_fingerprint(database_path: &Path) -> Result<Option<String>, Box<dyn Error>> {
     if !database_path.is_file() {
         return Ok(None);
     }
     let connection = open(database_path)?;
     let schema_version: i64 = connection.query_row("PRAGMA user_version", [], |row| row.get(0))?;
-    if schema_version != SCHEMA_VERSION {
+    if schema_version != 1 && schema_version != SCHEMA_VERSION {
         return Err(format!(
             "Version du cache SQLite non prise en charge ({schema_version}); réimportez un compendium avec --import."
         )
@@ -80,6 +103,7 @@ pub fn source_fingerprint(database_path: &Path) -> Result<Option<String>, Box<dy
     Ok(hash)
 }
 
+/// Remplace atomiquement toutes les entrées et métadonnées du cache SQLite.
 pub fn replace(
     database_path: &Path,
     source_path: &Path,
@@ -126,6 +150,12 @@ pub fn replace(
     insert_category(&transaction, "races", &compendium.races, |entry| {
         &entry.name
     })?;
+    insert_category(
+        &transaction,
+        "backgrounds",
+        &compendium.backgrounds,
+        |entry| &entry.name,
+    )?;
     insert_category(&transaction, "feats", &compendium.feats, |entry| {
         &entry.name
     })?;
@@ -148,12 +178,14 @@ pub fn replace(
     Ok(())
 }
 
+/// Ouvre la base locale avec un délai d'attente pour les accès concurrents.
 fn open(path: &Path) -> Result<Connection, Box<dyn Error>> {
     let connection = Connection::open(path)?;
     connection.busy_timeout(Duration::from_secs(5))?;
     Ok(connection)
 }
 
+/// Rend absolu un chemin de compendium relatif au répertoire de travail courant.
 fn absolute_path(path: &Path) -> Result<PathBuf, Box<dyn Error>> {
     if path.is_absolute() {
         Ok(path.to_path_buf())
@@ -162,6 +194,7 @@ fn absolute_path(path: &Path) -> Result<PathBuf, Box<dyn Error>> {
     }
 }
 
+/// Lit les métadonnées obligatoires du compendium dans la base.
 fn read_metadata(connection: &Connection) -> Result<Metadata, Box<dyn Error>> {
     let source_path = connection.query_row(
         "SELECT value FROM compendium_metadata WHERE key = 'source_path'",
@@ -179,6 +212,7 @@ fn read_metadata(connection: &Connection) -> Result<Metadata, Box<dyn Error>> {
     })
 }
 
+/// Désérialise en ordre d'import les entrées d'une catégorie du compendium.
 fn load_category<T: DeserializeOwned>(
     connection: &Connection,
     category: &str,
@@ -196,6 +230,7 @@ fn load_category<T: DeserializeOwned>(
         .collect()
 }
 
+/// Sérialise et insère une catégorie dans la transaction active.
 fn insert_category<T: Serialize>(
     transaction: &Transaction<'_>,
     category: &str,
@@ -219,6 +254,7 @@ mod tests {
     use crate::compendium::{Class, Compendium, Item};
 
     #[test]
+    /// Vérifie qu'un import remplace et recharge les données ainsi que leur empreinte.
     fn replaces_and_reloads_compendium_with_source_metadata() {
         let directory =
             std::env::temp_dir().join(format!("dnd-compendium-store-{}", std::process::id()));
@@ -256,6 +292,7 @@ mod tests {
     }
 
     #[test]
+    /// Vérifie qu'une erreur d'import annule toute la transaction.
     fn failed_replacement_keeps_the_previous_compendium() {
         let directory =
             std::env::temp_dir().join(format!("dnd-compendium-rollback-{}", std::process::id()));
@@ -294,6 +331,32 @@ mod tests {
         let (loaded, metadata) = load(&database).unwrap().unwrap();
         assert_eq!(loaded.items[0].name, "Original");
         assert_eq!(metadata.sha256, "original-hash");
+        std::fs::remove_dir_all(directory).unwrap();
+    }
+
+    #[test]
+    /// Vérifie la reconstruction d'un ancien cache à partir du XML source.
+    fn migrates_previous_cache_from_its_source_xml() {
+        let directory =
+            std::env::temp_dir().join(format!("dnd-compendium-migration-{}", std::process::id()));
+        std::fs::create_dir_all(&directory).unwrap();
+        let source = directory.join("source.xml");
+        let database = directory.join("compendium.sqlite3");
+        std::fs::write(
+            &source,
+            "<compendium><background><name>Sage</name><proficiency>Insight, Religion</proficiency></background></compendium>",
+        )
+        .unwrap();
+        let source_sha256 = fingerprint(&source).unwrap();
+        replace(&database, &source, &source_sha256, &Compendium::default()).unwrap();
+        rusqlite::Connection::open(&database)
+            .unwrap()
+            .pragma_update(None, "user_version", 1)
+            .unwrap();
+
+        let (loaded, _) = load(&database).unwrap().unwrap();
+
+        assert_eq!(loaded.backgrounds[0].name, "Sage");
         std::fs::remove_dir_all(directory).unwrap();
     }
 }
